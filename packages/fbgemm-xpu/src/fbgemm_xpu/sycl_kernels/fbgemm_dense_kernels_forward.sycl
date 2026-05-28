@@ -1,0 +1,277 @@
+/*
+ * Copyright 2026 Intel Corporation
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Portions of this file are derived from FBGEMM
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
+#include <torch/library.h>
+
+#include "fbgemm_dense_kernels_forward.h"
+
+using Tensor = at::Tensor;
+
+namespace fbgemm_xpu {
+
+    template <
+        typename emb_t,
+        typename cache_t,
+        typename output_t,
+        typename index_t,
+        size_t kThreadGroupSize>
+    void DenseEmbeddingNobagForwardUnweightedKernel<emb_t, cache_t, output_t, index_t, kThreadGroupSize>::operator()(const sycl::nd_item<2>& item) const {
+
+        const auto total_B = offsets_.size(0) - 1;
+        
+        const auto threadIdx_x = item.get_local_id(1);
+        const auto threadIdx_y = item.get_local_id(0);
+        const auto blockIdx_x = item.get_group(0);
+        const auto blockDim_y = item.get_local_range(0);
+        const auto gridDim_x = item.get_group_range(0);
+        const auto sg = item.get_sub_group();
+
+        // Grid-striding loop
+        for (auto b_t = blockIdx_x * blockDim_y + threadIdx_y; 
+                b_t < total_B; 
+                b_t += blockDim_y * gridDim_x) {
+ 
+            // Determine the Table and Training Example IDs
+            int32_t t;  // Table ID
+            int32_t b;  // Training Example ID
+            fd_B_.DivMod(b_t, &t, &b);
+            
+            // Determine the number of indices Vec4(pooling factor) to look up within the bag
+            overflow_safe_int_t indices_start = offsets_[b_t];
+
+            int32_t L = offsets_[b_t + 1] - indices_start;
+            // Get the offsets of the embedding dimensions of the tables and determine D
+
+            // From the Table ID, fetch its weight tensor offset, locate that position
+            // in the input weights tensor, and set the weights table pointer
+            const auto weights_offset = weights_offsets_[t];
+            const emb_t* __restrict__ weights;
+            weights = &dev_weights_[weights_offset];
+            // D is computed in the bag case or provided as function arg in the nobag case
+            // (nobag only supports the case where the embedding dimensions are the same for all tables)
+            int32_t D_emb = D_;
+
+            // Iterate over each kThreadGroupSize-sized subset of L indices in the bag
+            for (int32_t l_start = 0; l_start < L; l_start += kThreadGroupSize) {
+                // Determine the L index that this thread will load data from in cooperative load
+                auto l = l_start + threadIdx_x;
+                // Cooperatively load the indices
+                const overflow_safe_int_t idx = l < L ? indices_[indices_start + l] : 0;
+                // If idx is loaded
+                const auto offset_idx = idx * D_emb;
+
+                // Iterate over kThreadGroupSize indices
+                for (auto j = 0; j < kThreadGroupSize && l_start + j < L; ++j) {
+                    // Broadcast value from thread j in sub-group to all threads
+                    auto offset_idx_j = sycl::select_from_group(sg, offset_idx, j);
+                    overflow_safe_int_t output_j = indices_start + l_start + j;
+
+                    const auto weights_row = WeightRowAccessor
+                        <
+                            emb_t,
+                            cache_t
+                        >(
+                        &weights[offset_idx_j], // Load from the embedding table
+                        D_);
+                    
+                    for (int32_t i = 0; i < D_; i += kThreadGroupSize * kVecWidth) {
+                        const auto d = i + threadIdx_x * kVecWidth;
+
+                        if (d < D_) {
+                            // Since there is no pooling, simply copy the weights to output
+                            const auto weights_slice = weights_row.load(d);
+                            // output is 2D
+                            weights_slice.store(&output_[output_j][d]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    template <
+        typename emb_t,
+        typename cache_t,
+        typename output_t,
+        typename index_t,
+        size_t kThreadGroupSize>
+    void DenseEmbeddingNobagForwardUnweightedSmallKernel<emb_t, cache_t, output_t, index_t, kThreadGroupSize>::operator()(const sycl::nd_item<2>& item_ct1) const {
+        auto b_t = item_ct1.get_group(0) * item_ct1.get_local_range(0) +
+                item_ct1.get_local_id(0);
+        if (b_t >= offsets_.size(0) - 1) {
+            return;
+        }
+        int32_t t;
+        int32_t b;
+
+        fd_B_.DivMod(b_t, &t, &b);
+        const auto indices_start = offsets_[b_t];
+        const auto L = offsets_[b_t + 1] - indices_start; // dense
+
+        int64_t weights_offset = weights_offsets_[t];
+        const emb_t* __restrict__ weights;
+        weights = &dev_weights_[weights_offset];
+
+        int32_t D_emb = D_;
+        // not implementing int8 embedding for small kernel for now, can add if needed in the future
+        // if constexpr (std::is_same_v<emb_t, uint8_t>) {
+        //     D_emb += kINT8QparamsBytes;
+        // }
+
+        const int32_t lane_id = static_cast<int32_t>(item_ct1.get_local_id(1));
+        const int32_t group_start =
+            (lane_id / static_cast<int32_t>(kThreadGroupSize)) * static_cast<int32_t>(kThreadGroupSize);
+        const int32_t group_end = group_start + static_cast<int32_t>(kThreadGroupSize);
+        const int32_t d = (lane_id % static_cast<int32_t>(kThreadGroupSize)) * 4;
+        const uint32_t kSubGroupSize = item_ct1.get_sub_group().get_local_range().get(0);
+        for (int32_t l_start = 0; l_start < L; l_start += kSubGroupSize) {
+            const int32_t l = l_start + lane_id;
+            int64_t idx = l < L ? indices_[indices_start + l] : 0;
+            for (int32_t j = group_start; j < group_end && l_start + j < L; ++j) {
+                int64_t idx_j = sycl::select_from_group(item_ct1.get_sub_group(), idx, j);
+                int64_t output_j = indices_start + l_start + j;
+
+                auto weight_row_emb = WeightRowAccessor<emb_t, cache_t>(
+                    &weights[idx_j * D_emb],
+                    D_
+                );
+
+                if (d < D_) {
+                        Vec4T<cache_t> weight = weight_row_emb.load(d);
+                        // output is 2D
+                        weight.store(&output_[output_j][d]);
+                }
+            }
+        }
+    }
+
+    Tensor dense_embedding_nobag_forward_unweighted_xpu(
+        const Tensor& dev_weights,
+        const Tensor& weights_offsets,
+        const c10::SymInt D_,
+        const Tensor& indices,
+        const Tensor& offsets,
+        const int64_t output_dtype,
+        const bool is_experimental
+    ) {
+        const int64_t D = D_.guard_int(__FILE__, __LINE__);
+
+        TENSORS_ON_SAME_SYCL_XPU_IF_NOT_OPTIONAL(
+            weights_offsets,
+            indices,
+            offsets,
+            dev_weights
+        );
+
+        SYCL_DEVICE_GUARD(dev_weights);
+        int32_t total_L = indices.numel();
+        int32_t T = weights_offsets.numel();
+        TORCH_CHECK_GT(T, 0);
+
+        const auto total_B = offsets.size(0) - 1;
+        const int32_t B = total_B / T;
+        TORCH_CHECK_GE(B, 0);
+        TORCH_CHECK_GT(D, 0);
+        TORCH_CHECK_EQ(D % 4, 0);
+
+        Tensor output;
+        SparseType o_dtype = static_cast<SparseType>(output_dtype);
+        TORCH_CHECK(o_dtype == SparseType::FP32 || o_dtype == SparseType::FP16 ||
+                    o_dtype == SparseType::BF16 || o_dtype == SparseType::INT8);
+
+        int64_t adjusted_D = D;
+
+        // Match output dtype to dev_weights dtype for consistency
+        output = at::empty({total_L, adjusted_D}, dev_weights.options().dtype(getScalarType(o_dtype))); // if nobag
+
+        if (B == 0) {
+            return output;
+        }
+        
+        AT_DISPATCH_INDEX_TYPES(indices.scalar_type(), "batched_embedding_nobag_forward_kernel_1", [&] {
+        DISPATCH_EMB_CACHE_OUTPUT_TYPES(
+            dev_weights.scalar_type(),
+            dev_weights.scalar_type(),
+            output.scalar_type(),
+            "batched_embedding_nobag_forward_kernel_2", [&] {
+            try {
+                sycl::queue& queue = c10::xpu::getCurrentXPUStream().queue();
+                bool launched_small_kernel = false;
+
+                DISPATCH_OPTIMAL_NOBAG_FORWARD_KERNEL(D, [&] {
+                    launched_small_kernel = true;
+                    constexpr size_t kSmallThreadGroupSize = kEmbeddingSize / 4;
+                    constexpr size_t sg_size = kThreadGroupSize;
+                    constexpr size_t kBlockDimY = kForwardMaxThreads / sg_size;
+                    const size_t grid_x = (total_B + kBlockDimY - 1) / kBlockDimY;
+
+                    queue.submit([&](sycl::handler& cgh) {
+                        cgh.parallel_for<DenseEmbeddingNobagForwardUnweightedSmallKernel<emb_t, cache_t, output_t, index_t, kSmallThreadGroupSize>>(
+                            sycl::nd_range<2>(
+                                sycl::range<2>(grid_x * kBlockDimY, sg_size),
+                                sycl::range<2>(kBlockDimY, sg_size)
+                            ),
+                            DenseEmbeddingNobagForwardUnweightedSmallKernel<emb_t, cache_t, output_t, index_t, kSmallThreadGroupSize>(
+                                dev_weights.packed_accessor64<emb_t, 1, RestrictPtrTraits>(),
+                                weights_offsets.packed_accessor32<int64_t, 1, RestrictPtrTraits>(),
+                                D,
+                                FixedDivisor(B),
+                                indices.packed_accessor32<index_t, 1, RestrictPtrTraits>(),
+                                offsets.packed_accessor32<index_t, 1, RestrictPtrTraits>(),
+                                output.packed_accessor64<output_t, 2, RestrictPtrTraits>()
+                            )
+                        );
+                    });
+
+                    return;
+                });
+
+                if (!launched_small_kernel) {
+                    const size_t local_x = kThreadGroupSize; 
+                    const size_t local_y = kForwardMaxThreads / kThreadGroupSize;
+                    const size_t grid = div_round_up(static_cast<size_t>(total_B), local_y);
+                    
+                    queue.submit([&](sycl::handler& cgh) {
+                        cgh.parallel_for<DenseEmbeddingNobagForwardUnweightedKernel<emb_t, cache_t, output_t, index_t, kThreadGroupSize>>(
+                            sycl::nd_range<2>(
+                                sycl::range<2>(grid * local_y, local_x),
+                                sycl::range<2>(local_y, local_x)
+                            ),
+                            DenseEmbeddingNobagForwardUnweightedKernel<emb_t, cache_t, output_t, index_t, kThreadGroupSize>(
+                                dev_weights.packed_accessor64<emb_t, 1, RestrictPtrTraits>(),
+                                weights_offsets.packed_accessor32<int64_t, 1, RestrictPtrTraits>(),
+                                D,
+                                FixedDivisor(B),
+                                indices.packed_accessor32<index_t, 1, RestrictPtrTraits>(),
+                                offsets.packed_accessor32<index_t, 1, RestrictPtrTraits>(),
+                                output.packed_accessor64<output_t, 2, RestrictPtrTraits>()
+                            )
+                        );
+                    });
+                }
+                
+            } catch (const sycl::exception& e) {
+                std::cerr << "SYCL exception: " << e.what() << std::endl;
+                throw;
+            }
+        });
+        });
+
+        return output;
+    }
+} // namespace fbgemm_xpu
+
+TORCH_LIBRARY_IMPL(fbgemm, XPU, m) {
+    m.impl("dense_embedding_nobag_forward_unweighted_xpu", &fbgemm_xpu::dense_embedding_nobag_forward_unweighted_xpu);
+}
