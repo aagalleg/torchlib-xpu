@@ -1,6 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# Copyright (c) 2026 Intel Corporation. All Rights Reserved.
-
 cmake_minimum_required(VERSION 3.18)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -48,13 +45,13 @@ set(SYCL_DEVICE_LIST -Xs "-device ${TORCH_XPU_ARCH_LIST} -options -cl-poison-uns
 # --------------------------------------------------------------------------
 # Sources
 #
-# Skeleton: lists are intentionally empty. Add host C++ files alongside this
-# CMakeLists (e.g. your_op.cpp) and list them in host_sources. SYCL kernels
-# (.sycl) and companion .cpp files under sycl_kernels/ or fbgemm_utils/ are
-# picked up automatically by the GLOB_RECURSE below.
+# host_sources lists host C++ files that live alongside this CMakeLists.
+# SYCL kernels (.sycl) and companion .cpp files under sycl_kernels/ or
+# fbgemm_utils/ are picked up automatically by the GLOB_RECURSE below.
 # --------------------------------------------------------------------------
 set(host_sources
-    # your_op.cpp
+    ops_registry.cpp
+    fbgemm_dense_lookups_ops.cpp
 )
 
 file(GLOB_RECURSE sycl_sources CONFIGURE_DEPENDS
