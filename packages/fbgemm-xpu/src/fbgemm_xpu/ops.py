@@ -12,14 +12,15 @@
 
 # Python wrapper functions for all custom operators under the fbgemm namespace
 # This module provides user-friendly interfaces to the C++ operators
-import torch
+
 from typing import List, Optional, Tuple
 
+import torch
 from torch import Tensor
 
 __all__ = [
     "dense_embedding_codegen_lookup_function",
-    # "split_embedding_codegen_lookup_rowwise_adagrad_function_pt2",
+    "split_embedding_codegen_lookup_rowwise_adagrad_function_pt2",
     # "invert_permute",
     # "permute_1D_sparse_data",
     # "jagged_index_select_2d_forward",
@@ -182,58 +183,58 @@ def dense_embedding_codegen_lookup_function(
 
 #     return permuted_lengths, permuted_indices, permuted_weights
 
-# def split_embedding_codegen_lookup_rowwise_adagrad_function_pt2(
-#     placeholder_autograd_tensor: Tensor,
-#     weights: Tensor,
-#     D_offsets: Tensor,
-#     total_D: int,
-#     max_D: int,
-#     hash_size_cumsum: Tensor,
-#     total_hash_size_bits: int,
-#     indices: Tensor,
-#     offsets: Tensor,
-#     pooling_mode: int,
-#     aux_int: List[int],
-#     aux_float: List[float],
-#     aux_bool: List[bool],
-#     momentum1: List[Tensor],
-#     learning_rate_tensor: Tensor,
-#     output_dtype: int,
-#     optim_int: List[int],
-#     optim_float: List[float],
-#     indice_weights: Optional[Tensor] = None,
-#     feature_requires_grad: Optional[Tensor] = None,
-#     aux_tensor: Optional[Tensor] = None,
-#     max_B: int = -1,
-#     max_B_feature_rank: int = -1,
-#     vbe_output_size: int = -1
-# ) -> Tensor:
-#     return torch.ops.fbgemm.split_embedding_codegen_lookup_rowwise_adagrad_function_pt2(
-#         placeholder_autograd_tensor,
-#         weights,
-#         D_offsets,
-#         total_D,
-#         max_D,
-#         hash_size_cumsum,
-#         total_hash_size_bits,
-#         indices,
-#         offsets,
-#         pooling_mode,
-#         indice_weights,
-#         feature_requires_grad,
-#         output_dtype,
-#         aux_tensor,
-#         aux_int,
-#         aux_float,
-#         aux_bool,
-#         momentum1,
-#         learning_rate_tensor,
-#         optim_int,
-#         optim_float,
-#         max_B,
-#         max_B_feature_rank,
-#         vbe_output_size,
-#     )
+def split_embedding_codegen_lookup_rowwise_adagrad_function_pt2(
+    placeholder_autograd_tensor: Tensor,
+    weights: Tensor,
+    D_offsets: Tensor,
+    total_D: int,
+    max_D: int,
+    hash_size_cumsum: Tensor,
+    total_hash_size_bits: int,
+    indices: Tensor,
+    offsets: Tensor,
+    pooling_mode: int,
+    aux_int: List[int],
+    aux_float: List[float],
+    aux_bool: List[bool],
+    momentum1: List[Tensor],
+    learning_rate_tensor: Tensor,
+    output_dtype: int,
+    optim_int: List[int],
+    optim_float: List[float],
+    indice_weights: Optional[Tensor] = None,
+    feature_requires_grad: Optional[Tensor] = None,
+    aux_tensor: Optional[Tensor] = None,
+    max_B: int = -1,
+    max_B_feature_rank: int = -1,
+    vbe_output_size: int = -1
+) -> Tensor:
+    return torch.ops.fbgemm.split_embedding_codegen_lookup_rowwise_adagrad_function_pt2(
+        placeholder_autograd_tensor,
+        weights,
+        D_offsets,
+        total_D,
+        max_D,
+        hash_size_cumsum,
+        total_hash_size_bits,
+        indices,
+        offsets,
+        pooling_mode,
+        indice_weights,
+        feature_requires_grad,
+        output_dtype,
+        aux_tensor,
+        aux_int,
+        aux_float,
+        aux_bool,
+        momentum1,
+        learning_rate_tensor,
+        optim_int,
+        optim_float,
+        max_B,
+        max_B_feature_rank,
+        vbe_output_size,
+    )
     
 # # =============================================================================
 # # FBGEMM XPU Operators (temporal)
