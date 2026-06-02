@@ -140,7 +140,8 @@ TORCH_LIBRARY_FRAGMENT(fbgemm, m) {
             "    float[] optim_float, "
             "    SymInt max_B=-1, "
             "    SymInt max_B_feature_rank=-1, "
-            "    SymInt vbe_output_size=-1 "
+            "    SymInt vbe_output_size=-1, "
+            "    Tensor? vbe_output=None "
             ") -> Tensor");
     }
     
