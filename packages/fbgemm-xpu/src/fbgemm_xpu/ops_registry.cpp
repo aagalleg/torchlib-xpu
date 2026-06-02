@@ -249,7 +249,9 @@ TORCH_LIBRARY_FRAGMENT(fbgemm, m) {
 
     // // ===== Invert Permutation =====
 
-    // m.def("invert_permute(Tensor permute) -> Tensor");
+    if (!utils::torch::schemaExists("fbgemm::invert_permute")) {
+        m.def("invert_permute(Tensor permute) -> Tensor");
+    }
 
     // // ===== Permute 1D Sparse Data =====
 

@@ -21,7 +21,7 @@ from torch import Tensor
 __all__ = [
     "dense_embedding_codegen_lookup_function",
     "split_embedding_codegen_lookup_rowwise_adagrad_function_pt2",
-    # "invert_permute",
+    "invert_permute",
     # "permute_1D_sparse_data",
     # "jagged_index_select_2d_forward",
     # "asynchronous_complete_cumsum",
@@ -117,26 +117,13 @@ def dense_embedding_codegen_lookup_function(
 #     )
 
 
-# # =============================================================================
-# # Invert Permutation
-# # =============================================================================
+# =============================================================================
+# Invert Permutation
+# =============================================================================
 
-# def invert_permute(permute: Tensor) -> Tensor:
-#     """Computes the inverse of a permutation tensor."""
-#     return torch.ops.fbgemm.invert_permute.default(permute)
-
-
-# @torch.library.register_fake("fbgemm::invert_permute")
-# def _(permute):
-#     torch._check(
-#         permute.dim() == 1,
-#         lambda: f"invert_permute expects 1D tensor, got {permute.dim()}D",
-#     )
-#     torch._check(
-#         permute.dtype in (torch.int32, torch.int64),
-#         lambda: f"invert_permute expects int32 or int64, got {permute.dtype}",
-#     )
-#     return torch.empty_like(permute)
+def invert_permute(permute: Tensor) -> Tensor:
+    """Computes the inverse of a permutation tensor."""
+    return torch.ops.fbgemm.invert_permute.default(permute)
 
 
 # # =============================================================================
