@@ -207,7 +207,8 @@ def split_embedding_codegen_lookup_rowwise_adagrad_function_pt2(
     aux_tensor: Optional[Tensor] = None,
     max_B: int = -1,
     max_B_feature_rank: int = -1,
-    vbe_output_size: int = -1
+    vbe_output_size: int = -1,
+    vbe_output: Optional[Tensor] = None
 ) -> Tensor:
     return torch.ops.fbgemm.split_embedding_codegen_lookup_rowwise_adagrad_function_pt2(
         placeholder_autograd_tensor,
@@ -234,6 +235,7 @@ def split_embedding_codegen_lookup_rowwise_adagrad_function_pt2(
         max_B,
         max_B_feature_rank,
         vbe_output_size,
+        vbe_output,
     )
     
 # # =============================================================================
