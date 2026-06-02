@@ -538,7 +538,8 @@ Tensor split_embedding_codegen_lookup_rowwise_adagrad_function_pt2_xpu(
     std::vector<double> optim_float,
     const c10::SymInt max_B = -1,
     const c10::SymInt max_B_feature_rank = -1,
-    const c10::SymInt vbe_output_size = -1
+    const c10::SymInt vbe_output_size = -1,
+    std::optional<Tensor> vbe_output = std::nullopt
 ) {
     // Load the config value from JK once
     static auto is_tbev2_enabled = config::is_feature_enabled(config::FeatureGateName::TBE_V2);
