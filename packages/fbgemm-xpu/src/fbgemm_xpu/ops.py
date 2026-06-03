@@ -23,7 +23,7 @@ __all__ = [
     "split_embedding_codegen_lookup_rowwise_adagrad_function_pt2",
     "invert_permute",
     # "permute_1D_sparse_data",
-    # "jagged_index_select_2d_forward",
+    "jagged_index_select_2d_forward",
     # "asynchronous_complete_cumsum",
     # "dense_to_jagged",
     # "dense_to_jagged_forward",
@@ -88,34 +88,21 @@ def dense_embedding_codegen_lookup_function(
     )
 
 
-# # =============================================================================
-# # Jagged Index Select
-# # =============================================================================
+# =============================================================================
+# Jagged Index Select
+# =============================================================================
 
-# def jagged_index_select_2d_forward(
-#     values: Tensor,
-#     indices: Tensor,
-#     input_offsets: Tensor,
-#     output_offsets: Tensor,
-#     num_dense_output_rows: int,
-# ) -> Tensor:
-#     """Selects rows from a jagged tensor based on indices."""
-#     return torch.ops.fbgemm.jagged_index_select_2d_forward.default(
-#         values, indices, input_offsets, output_offsets, num_dense_output_rows
-#     )
-
-
-# @torch.library.register_fake("fbgemm::jagged_index_select_2d_forward")
-# def _(values, indices, input_offsets, output_offsets, num_dense_output_rows):
-#     torch._check(values.dim() == 2)
-#     torch._check(indices.dim() == 1)
-#     torch._check(input_offsets.dim() == 1)
-#     torch._check(output_offsets.dim() == 1)
-#     num_cols = values.size(1)
-#     return torch.empty(
-#         (num_dense_output_rows, num_cols), dtype=values.dtype, device=values.device
-#     )
-
+def jagged_index_select_2d_forward(
+    values: Tensor,
+    indices: Tensor,
+    input_offsets: Tensor,
+    output_offsets: Tensor,
+    num_dense_output_rows: int,
+) -> Tensor:
+    """Selects rows from a jagged tensor based on indices."""
+    return torch.ops.fbgemm.jagged_index_select_2d_forward.default(
+        values, indices, input_offsets, output_offsets, num_dense_output_rows
+    )
 
 # =============================================================================
 # Invert Permutation

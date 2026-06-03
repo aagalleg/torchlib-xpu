@@ -238,16 +238,34 @@ TORCH_LIBRARY_FRAGMENT(fbgemm, m) {
             "    int info_B_num_bits, "
             "    int info_B_mask_int64, "
             "    bool use_uniq_cache_locations, "
-            "    bool use_homogeneous_placements,"
-            "    Tensor(g!) momentum1_host, Tensor(h!) momentum1_dev, Tensor(i!) momentum1_uvm, Tensor momentum1_placements, Tensor momentum1_offsets, Tensor learning_rate_tensor, float eps = 0, float weight_decay = 0.0, int weight_decay_mode = 0, float max_norm = 0.0 "
+            "    bool use_homogeneous_placements, "
+            "    Tensor(g!) momentum1_host, "
+            "    Tensor(h!) momentum1_dev, "
+            "    Tensor(i!) momentum1_uvm, "
+            "    Tensor momentum1_placements, "
+            "    Tensor momentum1_offsets, "
+            "    Tensor learning_rate_tensor, "
+            "    float eps = 0, "
+            "    float weight_decay = 0.0, "
+            "    int weight_decay_mode = 0, "
+            "    float max_norm = 0.0"
             ") -> Tensor");
     }
 
-    // // ===== Jagged Index Select =====
+    // ===== Jagged Index Select =====
 
-    // m.def("jagged_index_select_2d_forward(Tensor values, Tensor indices, Tensor input_offsets, Tensor output_offsets, int num_dense_output_rows) -> Tensor");
+    if (!utils::torch::schemaExists("fbgemm::jagged_index_select_2d_forward")) {
+        m.def("jagged_index_select_2d_forward("
+            "    Tensor values, "
+            "    Tensor indices, "
+            "    Tensor input_offsets, "
+            "    Tensor output_offsets, "
+            "    int num_dense_output_rows"
+            ") -> Tensor"
+        );
+    }
 
-    // // ===== Invert Permutation =====
+    // ===== Invert Permutation =====
 
     if (!utils::torch::schemaExists("fbgemm::invert_permute")) {
         m.def("invert_permute(Tensor permute) -> Tensor");
