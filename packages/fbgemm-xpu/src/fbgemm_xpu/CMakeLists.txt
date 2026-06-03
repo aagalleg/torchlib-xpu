@@ -3,9 +3,16 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(PYBIND11_FINDPYTHON ON)
+# Prefer the active virtual environment Python when available.
+set(Python3_FIND_VIRTUALENV FIRST)
+if(DEFINED ENV{VIRTUAL_ENV})
+    set(Python3_ROOT_DIR "$ENV{VIRTUAL_ENV}")
+    set(Python3_EXECUTABLE "$ENV{VIRTUAL_ENV}/bin/python")
+endif()
+
+find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Module)
 find_package(pybind11 REQUIRED)
 find_package(Torch REQUIRED)
-find_package(Python3 COMPONENTS Development REQUIRED)
 
 # --------------------------------------------------------------------------
 # SYCL backend detection: enabled only when CXX is the Intel oneAPI compiler
@@ -49,9 +56,9 @@ set(SYCL_DEVICE_LIST -Xs "-device ${TORCH_XPU_ARCH_LIST} -options -cl-poison-uns
 # SYCL kernels (.sycl) and companion .cpp files under sycl_kernels/ or
 # fbgemm_utils/ are picked up automatically by the GLOB_RECURSE below.
 # --------------------------------------------------------------------------
-set(host_sources
-    ops_registry.cpp
-    fbgemm_dense_lookups_ops.cpp
+# Auto-include all host C++ sources in this directory.
+file(GLOB host_sources CONFIGURE_DEPENDS
+    *.cpp
 )
 
 file(GLOB_RECURSE sycl_sources CONFIGURE_DEPENDS
@@ -93,7 +100,7 @@ if(NOT all_sources)
     return()
 endif()
 
-python_add_library(_C MODULE WITH_SOABI ${all_sources})
+Python3_add_library(_C MODULE WITH_SOABI ${all_sources})
 set_target_properties(_C PROPERTIES PREFIX "")
 set_target_properties(_C PROPERTIES CXX_STANDARD 17)
 
