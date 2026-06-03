@@ -271,9 +271,11 @@ TORCH_LIBRARY_FRAGMENT(fbgemm, m) {
         m.def("invert_permute(Tensor permute) -> Tensor");
     }
 
-    // // ===== Permute 1D Sparse Data =====
+    // ===== Permute 1D Sparse Data =====
 
-    // m.def("permute_1D_sparse_data(Tensor permute, Tensor lengths, Tensor values, Tensor? weights=None, SymInt? permuted_lengths_sum=None) -> (Tensor, Tensor, Tensor?)");
+    if (!utils::torch::schemaExists("fbgemm::permute_1D_sparse_data")) {
+        m.def("permute_1D_sparse_data(Tensor permute, Tensor lengths, Tensor values, Tensor? weights=None, SymInt? permuted_lengths_sum=None) -> (Tensor, Tensor, Tensor?)");
+    }
 
     // // ===== FBGEMM XPU Operators (temporal — pending upstream) =====
 

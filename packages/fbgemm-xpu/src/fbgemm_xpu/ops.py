@@ -22,7 +22,7 @@ __all__ = [
     "dense_embedding_codegen_lookup_function",
     "split_embedding_codegen_lookup_rowwise_adagrad_function_pt2",
     "invert_permute",
-    # "permute_1D_sparse_data",
+    "permute_1D_sparse_data",
     "jagged_index_select_2d_forward",
     # "asynchronous_complete_cumsum",
     # "dense_to_jagged",
@@ -113,49 +113,26 @@ def invert_permute(permute: Tensor) -> Tensor:
     return torch.ops.fbgemm.invert_permute.default(permute)
 
 
-# # =============================================================================
-# # Permute 1D Sparse Data
-# # =============================================================================
+# =============================================================================
+# Permute 1D Sparse Data
+# =============================================================================
 
-# def permute_1D_sparse_data(
-#     permute: Tensor,
-#     lengths: Tensor,
-#     indices: Tensor,
-#     weights: Optional[Tensor] = None,
-#     permuted_lengths_sum: Optional[int] = None,
-# ) -> Tuple[Tensor, Tensor, Optional[Tensor]]:
-#     """Permutes sparse data in jagged/1D format according to permutation indices."""
-#     return torch.ops.fbgemm.permute_1D_sparse_data.default(
-#         permute, lengths, indices, weights, permuted_lengths_sum
-#     )
+def permute_1D_sparse_data(
+    permute: Tensor,
+    lengths: Tensor,
+    indices: Tensor,
+    weights: Optional[Tensor] = None,
+    permuted_lengths_sum: Optional[int] = None,
+) -> Tuple[Tensor, Tensor, Optional[Tensor]]:
+    """Permutes sparse data in jagged/1D format according to permutation indices."""
+    return torch.ops.fbgemm.permute_1D_sparse_data.default(
+        permute, lengths, indices, weights, permuted_lengths_sum
+    )
 
 
-# @torch.library.register_fake("fbgemm::permute_1D_sparse_data")
-# def _(permute, lengths, indices, weights=None, permuted_lengths_sum=None):
-#     torch._check(permute.dim() == 1, lambda: f"permute must be 1D, got {permute.dim()}D")
-#     torch._check(lengths.dim() == 1, lambda: f"lengths must be 1D, got {lengths.dim()}D")
-#     torch._check(indices.dim() == 1, lambda: f"indices must be 1D, got {indices.dim()}D")
-#     torch._check(permute.dtype == torch.int32, lambda: f"permute must be int32, got {permute.dtype}")
-
-#     permuted_lengths_size = permute.size(0)
-#     permuted_lengths = torch.empty(
-#         permuted_lengths_size, dtype=lengths.dtype, device=permute.device
-#     )
-
-#     if permuted_lengths_sum is not None:
-#         output_size = permuted_lengths_sum
-#     else:
-#         output_size = indices.size(0)
-
-#     permuted_indices = torch.empty(output_size, dtype=indices.dtype, device=permute.device)
-
-#     if weights is not None:
-#         torch._check(weights.dim() == 1, lambda: f"weights must be 1D, got {weights.dim()}D")
-#         permuted_weights = torch.empty(output_size, dtype=weights.dtype, device=permute.device)
-#     else:
-#         permuted_weights = None
-
-#     return permuted_lengths, permuted_indices, permuted_weights
+# =============================================================================
+# Split Embedding Operators
+# =============================================================================
 
 def split_embedding_codegen_lookup_rowwise_adagrad_function_pt2(
     placeholder_autograd_tensor: Tensor,
