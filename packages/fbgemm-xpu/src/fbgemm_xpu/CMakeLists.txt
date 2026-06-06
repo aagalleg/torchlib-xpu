@@ -19,7 +19,7 @@ find_package(Torch REQUIRED)
 # (icpx). Falls back to a host-only CPU build otherwise. Mirrors the previous
 # setup.py behavior driven by USE_SYCL / torch.xpu.is_available().
 # --------------------------------------------------------------------------
-if($ENV{CXX} MATCHES "icpx")
+if(CMAKE_CXX_COMPILER MATCHES "icpx")
     set(WITH_SYCL ON)
     message(STATUS "Intel compiler detected: SYCL kernels enabled")
 else()

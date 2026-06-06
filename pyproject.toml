@@ -30,7 +30,7 @@ package = true  # set root project as a buildable package
 # 'workspace = true' indicates that project will be provided by the workspace
 # rather than fetched from PyPI
 torchcodec-xpu = { workspace = true }
-fbgemm-xpu     = { workspace = true }
+fbgemm-xpu = { workspace = true }
 
 [tool.uv.workspace]
 members = [ "packages/*" ]

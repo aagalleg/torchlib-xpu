@@ -35,10 +35,10 @@ uv pip install -e "packages/fbgemm-xpu[test]" \
   --index https://download.pytorch.org/whl/xpu
 ```
 
-* Run tests:
+* Get installed package version:
 
 ```bash
-pytest packages/fbgemm-xpu/test/ -vv
+python -c "import fbgemm_xpu; print(fbgemm_xpu.__version__)"
 ```
 
 [uv]: https://github.com/astral-sh/uv
