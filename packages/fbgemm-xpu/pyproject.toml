@@ -1,19 +1,51 @@
 [build-system]
 requires = [
-    "setuptools",
-    "wheel",
-    "torch",
+    "numpy~=2.0",
+    "pybind11",
+    "scikit-build-core>=0.10",
+    "torch~=2.11.0",
 ]
-build-backend = "setuptools.build_meta"
+build-backend = "scikit_build_core.build"
 
 [project]
-name = "fbgemm"
-version = "0.1.0"
-description = "FBGEMM XPU operators for Intel GPUs (temporal)"
+name = "fbgemm-xpu"
+description = "FBGEMM XPU operators for Intel GPUs"
 readme = "README.md"
-requires-python = ">=3.9"
-license = {text = "BSD-3-Clause"}
-dependencies = []
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Alberto Gallegos Muro", email = "alberto.gallegos.muro@intel.com" },
+    { name = "Felipe Leza Alvarez", email = "felipe.leza.alvarez@intel.com" },
+    { name = "Manuel Santana Castolo", email = "manuel.santana.castolo@intel.com" },
+]
+dynamic = ["version"]
+dependencies = [
+    "numpy~=2.0",
+    "torch~=2.11.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest~=8.0",
+    "hypothesis~=6.0",
+    "expecttest~=0.3.0"
+]
 
 [project.urls]
-Repository = "TBD"
+GitHub = "https://github.com/intel/torchlib-xpu"
+
+[tool.scikit-build]
+cmake.version = ">=3.18"
+wheel.packages = ["src/fbgemm_xpu"]
+
+[tool.scikit-build.cmake.define]
+CMAKE_CXX_COMPILER = {env="CXX", default="icpx"}
+
+[[tool.scikit-build.generate]]
+path = "src/fbgemm_xpu/_version.py"
+template = '__version__ = "${version}"'
+
+[tool.scikit-build.metadata.version]
+provider = "scikit_build_core.metadata.regex"
+input = "version.txt"
+regex = "^v?(?P<value>[0-9a-zA-Z.+-_]+)"
