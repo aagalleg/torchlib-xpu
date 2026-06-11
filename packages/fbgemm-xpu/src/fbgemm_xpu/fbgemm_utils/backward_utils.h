@@ -58,13 +58,12 @@
 
 #include "utils.h"
 #include "vec4.h"
+#include "../sycl_kernels/asynchronous_complete_cumsum.h"
 
 using Tensor = at::Tensor;
 using at::native::RestrictPtrTraits;
 
 namespace fbgemm_xpu {
-
-    Tensor asynchronous_complete_cumsum_xpu(const Tensor& t_in);
 
     // Pass 1: Mark run starts
     template <typename index_t>

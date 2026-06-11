@@ -99,6 +99,8 @@ TORCH_LIBRARY_FRAGMENT(fbgemm, m) {
         );
     }
 
+    // ===== Split Embedding Operators =====
+
     if (!utils::torch::schemaExists("fbgemm::split_embedding_nobag_backward_dense_unweighted_exact_xpu")) {
         m.def("split_embedding_nobag_backward_dense_unweighted_exact_xpu("
             "    Tensor grad_output, "
@@ -268,36 +270,73 @@ TORCH_LIBRARY_FRAGMENT(fbgemm, m) {
     // ===== Invert Permutation =====
 
     if (!utils::torch::schemaExists("fbgemm::invert_permute")) {
-        m.def("invert_permute(Tensor permute) -> Tensor");
+        m.def(
+            "invert_permute(Tensor permute) -> Tensor"
+        );
     }
 
     // ===== Permute 1D Sparse Data =====
 
     if (!utils::torch::schemaExists("fbgemm::permute_1D_sparse_data")) {
-        m.def("permute_1D_sparse_data(Tensor permute, Tensor lengths, Tensor values, Tensor? weights=None, SymInt? permuted_lengths_sum=None) -> (Tensor, Tensor, Tensor?)");
+        m.def(
+            "permute_1D_sparse_data("
+            "    Tensor permute, "
+            "    Tensor lengths, "
+            "    Tensor values, "
+            "    Tensor? weights=None, "
+            "    SymInt? permuted_lengths_sum=None"
+            ") -> (Tensor, Tensor, Tensor?)"
+        );
     }
 
-    // // ===== FBGEMM XPU Operators (temporal — pending upstream) =====
+    // ===== Asynchronous Complete Cumsum =====
 
-    // m.def("asynchronous_complete_cumsum(Tensor t_in) -> Tensor");
+    if (!utils::torch::schemaExists("fbgemm::asynchronous_complete_cumsum")) {
+        m.def(
+            "asynchronous_complete_cumsum(Tensor t_in) -> Tensor"
+        );
+    }
 
-    // m.def("dense_to_jagged(Tensor dense, Tensor[] x_offsets, SymInt? total_L=None) -> (Tensor, Tensor[])");
+    // ===== Reorder Batched =====
 
-    // m.def("dense_to_jagged_forward(Tensor dense, Tensor[] x_offsets, SymInt? total_L=None) -> Tensor");
+    if (!utils::torch::schemaExists("fbgemm::reorder_batched_ad_lengths")) {
+        m.def(
+            "reorder_batched_ad_lengths("
+            "    Tensor cat_ad_lengths, "
+            "    Tensor batch_offsets, "
+            "    int num_ads_in_batch, "
+            "    bool broadcast_lengths=False, "
+            "    int max_batch_size=0"
+            ") -> Tensor"
+        );
+    }
 
-    // m.def("jagged_to_padded_dense(Tensor values, Tensor[] offsets, SymInt[] max_lengths, float padding_value=0.0) -> Tensor");
+    if (!utils::torch::schemaExists("fbgemm::reorder_batched_ad_indices")) {
+        m.def(
+            "reorder_batched_ad_indices("
+            "    Tensor cat_ad_offsets, "
+            "    Tensor cat_ad_indices, "
+            "    Tensor reordered_cat_ad_offsets, "
+            "    Tensor batch_offsets, "
+            "    int num_ads_in_batch, "
+            "    bool broadcast_indices=False, "
+            "    int num_indices_after_broadcast=-1"
+            ") -> Tensor"
+        );
+    }
 
-    // m.def("jagged_to_padded_dense_forward(Tensor values, Tensor[] offsets, SymInt[] max_lengths, float padding_value=0.0) -> Tensor");
+    // ===== Permute 2D Sparse Data =====
 
-    // m.def("jagged_dense_elementwise_add_jagged_output(Tensor x_values, Tensor[] x_offsets, Tensor y) -> (Tensor, Tensor[])");
+    if (!utils::torch::schemaExists("fbgemm::permute_2D_sparse_data")) {
+        m.def(
+            "permute_2D_sparse_data("
+            "    Tensor permute, "
+            "    Tensor lengths, "
+            "    Tensor values, "
+            "    Tensor? weights=None, "
+            "    SymInt? permuted_lengths_sum=None"
+            ") -> (Tensor, Tensor, Tensor?)"
+        );
+    }
 
-    // m.def("reorder_batched_ad_lengths(Tensor cat_ad_lengths, Tensor batch_offsets, int num_ads_in_batch, bool broadcast_lengths=False, int max_batch_size=0) -> Tensor");
-
-    // m.def("reorder_batched_ad_indices(Tensor cat_ad_offsets, Tensor cat_ad_indices, Tensor reordered_cat_ad_offsets, Tensor batch_offsets, int num_ads_in_batch, bool broadcast_indices=False, int num_indices_after_broadcast=-1) -> Tensor");
-
-    // m.def("permute_2D_sparse_data(Tensor permute, Tensor lengths, Tensor values, Tensor? weights=None, SymInt? permuted_lengths_sum=None) -> (Tensor, Tensor, Tensor?)");
-
-    // // ===== Jagged 2D to Dense =====
-
-    // m.def("jagged_2d_to_dense(Tensor values, Tensor offsets, SymInt max_sequence_length) -> Tensor");
 }
