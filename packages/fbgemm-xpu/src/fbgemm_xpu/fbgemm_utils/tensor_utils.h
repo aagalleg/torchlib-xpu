@@ -25,6 +25,15 @@ inline std::optional<int64_t> get_device_index_from_tensor(
   return {ten.device().index()};
 }
 
+inline std::optional<int64_t> get_device_index_from_tensor(
+    const std::optional<at::Tensor>& ten) {
+  if (ten) {
+    return {ten->device().index()};
+  } else {
+    return {};
+  }
+}
+
 inline bool torch_tensor_on_sycl_xpu_check(const at::Tensor& ten) {
   return ten.is_xpu();
 }
@@ -35,6 +44,10 @@ inline std::string torch_tensor_device_name(const at::Tensor& ten) {
 
 inline bool torch_tensor_undefined(const at::Tensor& ten) {
   return ten.defined();
+}
+
+inline bool torch_tensor_undefined(const std::optional<at::Tensor>& ten) {
+  return !ten.has_value() || torch_tensor_undefined(ten.value());
 }
 
 inline bool torch_tensor_on_cpu_or_on_mtia_check(const at::Tensor& ten) {

@@ -232,3 +232,31 @@ struct SourceContext {
             #NAME, " not implemented for grad_t '", toString(_grad_t), "'");   \
     }                                                                          \
   }()
+
+// ============================================================================
+// Type Dispatch Macros for Sparse Operations
+// ============================================================================
+
+#define FBGEMM_DISPATCH_FLOATING_TYPES_CASE(...)       \
+  AT_DISPATCH_CASE(at::ScalarType::Float, __VA_ARGS__) \
+  AT_DISPATCH_CASE(at::ScalarType::Half, __VA_ARGS__)  \
+  AT_DISPATCH_CASE(at::ScalarType::BFloat16, __VA_ARGS__)
+
+#define FBGEMM_DISPATCH_INTEGRAL_TYPES_CASE(...)     \
+  AT_DISPATCH_CASE(at::ScalarType::Int, __VA_ARGS__) \
+  AT_DISPATCH_CASE(at::ScalarType::Long, __VA_ARGS__)
+
+#define FBGEMM_DISPATCH_ALL_TYPES(TYPE, NAME, ...)     \
+  AT_DISPATCH_SWITCH(                                  \
+      TYPE,                                            \
+      NAME,                                            \
+      FBGEMM_DISPATCH_FLOATING_TYPES_CASE(__VA_ARGS__) \
+          FBGEMM_DISPATCH_INTEGRAL_TYPES_CASE(__VA_ARGS__))
+
+#define FBGEMM_DISPATCH_ALL_TYPES_AND_DOUBLE(TYPE, NAME, ...) \
+  AT_DISPATCH_SWITCH(                                         \
+      TYPE,                                                   \
+      NAME,                                                   \
+      FBGEMM_DISPATCH_FLOATING_TYPES_CASE(__VA_ARGS__)        \
+          FBGEMM_DISPATCH_INTEGRAL_TYPES_CASE(__VA_ARGS__)    \
+              AT_DISPATCH_CASE(at::ScalarType::Double, __VA_ARGS__))

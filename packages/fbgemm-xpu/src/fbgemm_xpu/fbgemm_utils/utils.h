@@ -20,6 +20,8 @@
 
 #include <ATen/ATen.h>
 #include <c10/macros/Macros.h>
+#include <sycl/sycl.hpp>
+#include <comm/SYCLContext.h>
 
 #include "dispatch_macros.h"
 
@@ -117,6 +119,50 @@ using fint32 = union fint32 {
   uint32_t I;
   float F;
 };
+
+// ============================================================================
+// Block Count Calculation Utilities (from fbgemm_utils.h/sycl)
+// ============================================================================
+
+/**
+ * @brief Calculate the number of SYCL work-groups (blocks) needed
+ * 
+ * Base function for calculating block count with overflow protection.
+ * 
+ * @param num_items Total number of items to process
+ * @param threads_per_block Number of work-items per work-group
+ * @return Number of work-groups needed (capped at max_blocks)
+ */
+inline uint32_t xpu_calc_xblock_count_base(int num_items, int threads_per_block) {
+  // The number of threads can be as high as 2048 on some newer architectures,
+  // but this is not portable.
+  TORCH_CHECK(
+      threads_per_block <= syclDeviceMaxWorkGroupSize(),
+      "Number of threads must be <=1024!");
+  constexpr uint64_t max_blocks = 2147483647;
+  const auto u_num_items = static_cast<uint64_t>(num_items);
+  const auto u_threads = static_cast<uint64_t>(threads_per_block);
+  // Overflow safe variant of (a + b - 1) / b
+  const uint64_t blocks =
+      u_num_items / u_threads + (u_num_items % u_threads != 0);
+  return static_cast<uint32_t>(std::min(blocks, max_blocks));
+}
+
+/**
+ * @brief Calculate the number of SYCL work-groups (blocks) needed
+ * 
+ * Validates input and calls xpu_calc_xblock_count_base.
+ * 
+ * @param num_items Total number of items to process (must be >= 0)
+ * @param threads_per_block Number of work-items per work-group
+ * @return Number of work-groups needed
+ */
+inline uint32_t xpu_calc_xblock_count(int num_items, int threads_per_block) {
+  TORCH_CHECK(
+      num_items >= 0,
+      "When calculating block counts, the number of items must be positive!");
+  return xpu_calc_xblock_count_base(num_items, threads_per_block);
+}
 
 class FixedDivisor {
  public:
