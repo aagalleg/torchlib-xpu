@@ -207,23 +207,3 @@ def permute_2D_sparse_data(
     return torch.ops.fbgemm.permute_2D_sparse_data.default(
         permute, lengths, indices, weights, permuted_lengths_sum
     )
-
-
-@torch.library.register_fake("fbgemm::permute_2D_sparse_data")
-def _(permute, lengths, indices, weights=None, permuted_lengths_sum=None):
-    torch._check(lengths.dim() == 2)
-    T = permute.numel()
-    B = lengths.size(1)
-    permuted_lengths = torch.empty((T, B), dtype=lengths.dtype, device=lengths.device)
-
-    if permuted_lengths_sum is not None:
-        output_size = permuted_lengths_sum
-    else:
-        output_size = indices.size(0)
-
-    permuted_indices = torch.empty(output_size, dtype=indices.dtype, device=indices.device)
-    permuted_weights = (
-        torch.empty(output_size, dtype=weights.dtype, device=weights.device)
-        if weights is not None else None
-    )
-    return permuted_lengths, permuted_indices, permuted_weights
