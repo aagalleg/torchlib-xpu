@@ -13,6 +13,7 @@ from torch import Tensor
 __all__ = [
     "invert_permute",
 	"permute_1D_sparse_data",
+    "asynchronous_complete_cumsum",
 ]
 
 def invert_permute(permute: Tensor) -> Tensor:
@@ -31,3 +32,7 @@ def permute_1D_sparse_data(
     return torch.ops.fbgemm.permute_1D_sparse_data.default(
         permute, lengths, indices, weights, permuted_lengths_sum
     )
+
+def asynchronous_complete_cumsum(t_in: Tensor) -> Tensor:
+    """Computes complete cumulative sum: output[0] = 0, output[i] = sum(t_in[0:i])."""
+    return torch.ops.fbgemm.asynchronous_complete_cumsum.default(t_in)
