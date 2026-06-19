@@ -359,4 +359,10 @@ TORCH_LIBRARY_FRAGMENT(fbgemm, m) {
             "    int num_indices_after_broadcast=-1"
             ") -> Tensor");
     }
+
+    if (!utils::torch::schemaExists("fbgemm::asynchronous_complete_cumsum")) {
+        m.def(
+            "asynchronous_complete_cumsum(Tensor t_in) -> Tensor"
+        );
+    }
 }
