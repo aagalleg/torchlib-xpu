@@ -335,4 +335,10 @@ TORCH_LIBRARY_FRAGMENT(fbgemm, m) {
             "    Tensor bucket_mapping"
             ") -> Tensor");
     }
+
+    if (!utils::torch::schemaExists("fbgemm::asynchronous_complete_cumsum")) {
+        m.def(
+            "asynchronous_complete_cumsum(Tensor t_in) -> Tensor"
+        );
+    }
 }
