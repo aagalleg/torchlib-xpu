@@ -14,6 +14,7 @@ __all__ = [
     "invert_permute",
 	"permute_1D_sparse_data",
     "asynchronous_complete_cumsum",
+    "permute_2D_sparse_data",
 ]
 
 def invert_permute(permute: Tensor) -> Tensor:
@@ -36,3 +37,15 @@ def permute_1D_sparse_data(
 def asynchronous_complete_cumsum(t_in: Tensor) -> Tensor:
     """Computes complete cumulative sum: output[0] = 0, output[i] = sum(t_in[0:i])."""
     return torch.ops.fbgemm.asynchronous_complete_cumsum.default(t_in)
+
+def permute_2D_sparse_data(
+    permute: Tensor,
+    lengths: Tensor,
+    indices: Tensor,
+    weights: Optional[Tensor] = None,
+    permuted_lengths_sum: Optional[int] = None,
+) -> Tuple[Tensor, Tensor, Optional[Tensor]]:
+    """Permutes 2D sparse data (lengths: [T, B]) according to permutation indices."""
+    return torch.ops.fbgemm.permute_2D_sparse_data.default(
+        permute, lengths, indices, weights, permuted_lengths_sum
+    )
