@@ -1,0 +1,115 @@
+/*
+ * Copyright 2026 Intel Corporation
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Portions of this file are derived from FBGEMM
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
+{#
+// @lint-ignore LINTIGNORE
+// @lint-ignore-every CLANGFORMAT
+// clang-format off
+#}
+
+{%- set mdesc = "split" %}
+
+////////////////////////////////////////////////////////////////////////////////
+// PT2 WRAPPER IMPLEMENTATION - {{ mdesc | upper }} EMBEDDING FORWARD
+////////////////////////////////////////////////////////////////////////////////
+//
+// CUDA SOURCE MAPPING:
+//   CUDA Function: {{ mdesc }}_embedding_nobag_codegen_forward_unweighted_pt2_cuda_wrapper
+//   CUDA File: gen_embedding_forward_{{ mdesc }}_pt2_cuda_wrapper.cpp
+//   CUDA Template: pt2/embedding_split_host_pt2_cuda_wrapper_template.cpp
+//
+// DESCRIPTION:
+//   PT2 (PyTorch 2.0) compilation wrapper implementation for {{ mdesc }} embedding.
+//   Uses PyTorch dispatcher to call the actual kernel implementation.
+//
+////////////////////////////////////////////////////////////////////////////////
+
+#include <torch/all.h>
+#include <torch/library.h>
+#include <ATen/ATen.h>
+
+using Tensor = at::Tensor;
+
+namespace fbgemm_xpu {
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // {{ mdesc }}_embedding_nobag_forward_unweighted_pt2_xpu_wrapper
+    ////////////////////////////////////////////////////////////////////////////////
+    //
+    // IMPLEMENTATION:
+    //   Uses torch::Dispatcher to find and call the registered kernel operator.
+    //   Converts parameters from PT2 wrapper format to kernel format.
+    //
+    ////////////////////////////////////////////////////////////////////////////////
+
+
+    Tensor {{ mdesc }}_embedding_nobag_codegen_forward_unweighted_pt2_xpu_wrapper(
+        const Tensor& /*host_weights*/,
+        const Tensor& dev_weights,
+        const Tensor& uvm_weights,
+        const Tensor& lxu_cache_weights,
+        const Tensor& weights_placements,
+        const Tensor& weights_offsets,
+        const c10::SymInt D,
+        const Tensor& hash_size_cumsum,
+        const Tensor& indices,
+        const Tensor& offsets,
+        const Tensor& lxu_cache_locations,
+        const Tensor& uvm_cache_stats,
+        const bool is_experimental,
+        const int64_t output_dtype
+        ){
+        static auto op =
+            torch::Dispatcher::singleton()
+                .findSchemaOrThrow("fbgemm::{{ mdesc }}_embedding_nobag_forward_unweighted_xpu", "")
+                .typed<Tensor(
+                    const Tensor& /*host_weights*/,
+                    const Tensor& /*dev_weights*/,
+                    const Tensor& /*uvm_weights*/,
+                    const Tensor& /*lxu_cache_weights*/,
+                    const Tensor& /*weights_placements*/,
+                    const c10::SymInt /*D*/,
+                    const Tensor& /*indices*/,
+                    const Tensor& /*offsets*/,
+                    const Tensor& /*row_addrs or lxu_cache_locations*/,
+                    const Tensor& /*uvm_cache_stats_*/,
+                    const int64_t /*output_dtype*/,
+                    const bool
+                )>();
+
+        return op.call(
+                dev_weights,
+                uvm_weights,
+                lxu_cache_weights,
+                weights_placements,
+                weights_offsets,
+                D,
+                indices,
+                offsets,
+                lxu_cache_locations,
+                uvm_cache_stats,
+                output_dtype, 
+                is_experimental
+        );
+    };
+
+} // namespace fbgemm_xpu
+
+////////////////////////////////////////////////////////////////////////////////
+// TORCH LIBRARY IMPLEMENTATION REGISTRATION
+////////////////////////////////////////////////////////////////////////////////
+TORCH_LIBRARY_IMPL(fbgemm, XPU, m) {
+    m.impl("{{ mdesc }}_embedding_nobag_codegen_forward_unweighted_pt2_wrapper", 
+        &fbgemm_xpu::{{ mdesc }}_embedding_nobag_codegen_forward_unweighted_pt2_xpu_wrapper);
+}
