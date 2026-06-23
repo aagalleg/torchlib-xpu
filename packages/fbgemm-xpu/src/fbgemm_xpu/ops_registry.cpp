@@ -147,8 +147,8 @@ TORCH_LIBRARY_FRAGMENT(fbgemm, m) {
             ") -> Tensor");
     }
     
-    if (!utils::torch::schemaExists("fbgemm::split_embedding_nobag_forward_unweighted_pt2_wrapper")) {
-        m.def("split_embedding_nobag_forward_unweighted_pt2_wrapper("
+    if (!utils::torch::schemaExists("fbgemm::split_embedding_nobag_codegen_forward_unweighted_pt2_wrapper")) {
+        m.def("split_embedding_nobag_codegen_forward_unweighted_pt2_wrapper("
             "    Tensor host_weights, "
             "    Tensor dev_weights, "
             "    Tensor uvm_weights, "

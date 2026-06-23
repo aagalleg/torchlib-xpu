@@ -41,7 +41,7 @@
 //   - Integrates with Kineto profiler for performance analysis
 //
 // PYTORCH DISPATCHER REGISTRATION:
-//   - Forward operator: fbgemm::split_embedding_nobag_forward_unweighted_pt2_wrapper
+//   - Forward operator: fbgemm::split_embedding_nobag_codegen_forward_unweighted_pt2_wrapper
 //   - Backward operator: fbgemm::split_embedding_nobag_backward_rowwise_adagrad_unweighted_pt2_wrapper
 //   - Autograd function: fbgemm::split_embedding_codegen_lookup_rowwise_adagrad_function_pt2
 //   - Dispatch key: AutogradXPU (registered via TORCH_LIBRARY_IMPL)
@@ -69,7 +69,6 @@
 #include "fbgemm_utils/pt2_arg_utils.h"
 #include "fbgemm_utils/feature_gates.h"
 #include "sycl_kernels/fbgemm_split_kernels_backward.h"
-#include "sycl_kernels/fbgemm_split_kernels_forward.h"
 
 using Tensor = at::Tensor;
 namespace profiler = torch::autograd::profiler;
@@ -93,11 +92,11 @@ namespace fbgemm_xpu {
 //   Supports PT2 compilation with SymInt types and compile guards.
 //
 // FORWARD PASS:
-//   Dispatches to: fbgemm::split_embedding_nobag_forward_unweighted_pt2_wrapper
+//   Dispatches to: fbgemm::split_embedding_nobag_codegen_forward_unweighted_pt2_cuda_wrapper
 //   XPU Implementation: split_embedding_nobag_forward_unweighted_xpu
 //
 // BACKWARD PASS:
-//   Dispatches to: fbgemm::split_embedding_nobag_backward_rowwise_adagrad_unweighted_pt2_wrapper
+//   Dispatches to: fbgemm::split_embedding_nobag_backward_codegen_rowwise_adagrad_unweighted_pt2_cuda_wrapper
 //   XPU Implementation: split_embedding_nobag_backward_rowwise_adagrad_unweighted_exact_xpu
 //
 ////////////////////////////////////////////////////////////////////////////////
@@ -278,7 +277,7 @@ class SplitNoBagLookupFunction_rowwise_adagrad_Op_pt2 :
     // nobag
     static auto embedding_forward_op =
         torch::Dispatcher::singleton()
-            .findSchemaOrThrow("fbgemm::split_embedding_nobag_forward_unweighted_pt2_wrapper", "")
+            .findSchemaOrThrow("fbgemm::split_embedding_nobag_codegen_forward_unweighted_pt2_wrapper", "")
             .typed<Tensor(
                 const Tensor& /*weights_host*/,
                 const Tensor& /*weights_dev*/,

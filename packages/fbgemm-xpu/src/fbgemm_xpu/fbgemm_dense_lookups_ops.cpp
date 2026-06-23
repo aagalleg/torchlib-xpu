@@ -48,12 +48,35 @@
 #include "fbgemm_utils/feature_gates.h"
 #include "fbgemm_utils/utils.h"
 #include "sycl_kernels/fbgemm_dense_kernels_backward.h"
-#include "sycl_kernels/fbgemm_dense_kernels_forward.h"
 
 using Tensor = at::Tensor;
 namespace profiler = torch::autograd::profiler;
 
 namespace fbgemm_xpu {
+
+Tensor
+split_embedding_nobag_backward_codegen_dense_unweighted_exact_cuda(
+    const Tensor& grad_output,
+    const Tensor& dev_weights,
+    const Tensor& weights_offsets,
+    const c10::SymInt D,
+    const Tensor& hash_size_cumsum,
+    const int64_t total_hash_size_bits,
+    const Tensor& indices,
+    const Tensor& offsets,
+    const int64_t BT_block_size,
+    const int64_t max_segment_length_per_warp,
+    double unused = 0);
+
+Tensor dense_embedding_nobag_forward_unweighted_xpu(
+    const Tensor& dev_weights,
+    const Tensor& weights_offsets,
+    const c10::SymInt D,
+    const Tensor& indices,
+    const Tensor& offsets,
+    const int64_t output_dtype,
+    const bool is_experimental
+);
 
 ////////////////////////////////////////////////////////////////////////////////
 // SplitNoBagLookupFunctionDenseOpXPU - No-Bag (Sequence) Embedding Autograd
@@ -71,11 +94,11 @@ namespace fbgemm_xpu {
 //
 // FORWARD PATH:
 //   Calls: dense_embedding_nobag_forward_unweighted_xpu
-//   CUDA Equivalent: dense_embedding_nobag_forward_unweighted_cuda
+//   CUDA Equivalent: dense_embedding_nobag_forward_codegen_unweighted_cuda
 //
 // BACKWARD PATH:
 //   Calls: split_embedding_nobag_backward_dense_unweighted_exact_xpu
-//   CUDA Equivalent: split_embedding_nobag_backward_dense_unweighted_exact_cuda
+//   CUDA Equivalent: split_embedding_nobag_backward_codegen_dense_unweighted_exact_cuda
 //
 ////////////////////////////////////////////////////////////////////////////////
 class SplitNoBagLookupFunctionDenseOpXPU :
