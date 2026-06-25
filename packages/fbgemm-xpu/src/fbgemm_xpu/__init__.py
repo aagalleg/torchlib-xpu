@@ -11,8 +11,8 @@ import fbgemm_gpu  # noqa: F401, E402
 import torch  # noqa: F401
 
 # Import the compiled C extension (_C) which contains the registered operators.
-# If native dependencies (for example libtorch.so) are unavailable, keep import
-# working so metadata like __version__ remains accessible.
+# If native dependencies are unavailable, keep import working so metadata like
+# __version__ remains accessible.
 try:
     from . import _C as _C
 except ImportError:
