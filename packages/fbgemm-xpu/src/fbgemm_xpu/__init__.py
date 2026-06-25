@@ -2,9 +2,14 @@
 # Copyright (c) 2026 Intel Corporation. All Rights Reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 
+# Import torch first to ensure libtorch.so is loaded before our C extension.
+# The _C module links against PyTorch libraries, and the dynamic linker needs
+# those symbols to be available in memory before loading our extension.
+import torch  # noqa: F401
+
 # Import the compiled C extension (_C) which contains the registered operators.
-# If native dependencies (for example libtorch.so) are unavailable, keep import
-# working so metadata like __version__ remains accessible.
+# If native dependencies are unavailable, keep import working so metadata like
+# __version__ remains accessible.
 try:
     from . import _C as _C
 except ImportError:
