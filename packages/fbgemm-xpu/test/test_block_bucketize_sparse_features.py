@@ -12,15 +12,13 @@
 #   - torch.accelerator.current_accelerator() → "xpu"
 #   - Removed CUDA-specific warp kernel test (not applicable to XPU)
 
-import random
 import unittest
 from typing import Optional
 
+import fbgemm_xpu  # noqa: F401
 import hypothesis.strategies as st
 import torch
-from hypothesis import given, settings, Verbosity
-
-import fbgemm_xpu  # noqa: F401
+from hypothesis import Verbosity, given, settings
 
 xpu_available = torch.xpu.is_available()
 
@@ -1388,12 +1386,6 @@ class BlockBucketizeTest(unittest.TestCase):
         block_sizes = torch.tensor([5, 10, 8], dtype=index_type)
         my_size = 2
         max_B = batch_sizes.max().item()  # unused
-
-        block_bucketize_pos = [
-            torch.tensor([0, 2, 8], dtype=index_type),
-            torch.tensor([0, 5, 10], dtype=index_type),
-            torch.tensor([0, 7, 12], dtype=index_type),
-        ]
 
         new_lengths_ref = torch.tensor(
             [1, 0, 0, 0, 0, 1, 1, 1, 1, 2, 0, 1],
