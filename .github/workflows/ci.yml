@@ -153,9 +153,55 @@ jobs:
         path: _wheels
         compression-level: 0
 
+  build-fbgemm:
+    strategy:
+      matrix:
+        python-version: [ '3.10', '3.11', '3.12', '3.13', '3.14' ]
+    runs-on: ubuntu-24.04
+    env:
+      WHEELS: fbgemm-xpu-${{ matrix.python-version }}-wheels
+    container:
+      image: 'pytorch/manylinux2_28-builder:xpu-v2.12.0-rc1'
+    steps:
+    - name: 'Checkout'
+      uses: actions/checkout@v7
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: 'Install prerequisites'
+      run: |
+        rpm --import https://repositories.intel.com/gpu/intel-graphics.key
+        dnf install -y libva-devel
+    - name: 'Build fbgemm-xpu'
+      working-directory: packages/fbgemm-xpu
+      run: |
+        source /opt/intel/oneapi/setvars.sh
+        uv build --index https://download.pytorch.org/whl/xpu -vv
+    - name: 'Repair wheels with auditwheel'
+      run: |
+        uvx auditwheel repair packages/fbgemm-xpu/dist/*.whl \
+          --wheel-dir _wheels/${{ env.WHEELS }}-${{ env.PR_OR_SHA }}-${{ env.UNIQUE_ID }} \
+          --exclude "*" --allow-pure-python-wheel
+    - name: 'Test installing fbgemm-xpu'
+      run: |
+        uv venv
+        uv pip install \
+          _wheels/${{ env.WHEELS }}-${{ env.PR_OR_SHA }}-${{ env.UNIQUE_ID }}/*.whl \
+          --index https://download.pytorch.org/whl/xpu -vv
+    - name: 'Test importing fbgemm-xpu'
+      run: |
+        uv run --no-project python -c "import fbgemm_xpu; print(fbgemm_xpu.__version__)"
+    - name: 'Upload wheels'
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ env.WHEELS }}-${{ env.PR_OR_SHA }}-${{ env.UNIQUE_ID }}
+        path: _wheels
+        compression-level: 0
+
   # This job just merges all wheels into single archive
   compose:
-    needs: build
+    needs: [ build, build-fbgemm ]
     runs-on: ubuntu-24.04
     env:
       WHEELS: torchlib-all-wheels
@@ -163,12 +209,14 @@ jobs:
     - name: 'Download wheels'
       uses: actions/download-artifact@v8
       with:
-        pattern: torchlib-*
+        pattern: '*-wheels-*'
         path: _all_wheels
         # The goal is to get the following layout:
         # _all_wheels/
         #   torchlib-3.14-wheels-xxx-yyy
         #   torchlib-3.13-wheels-xxx-yyy
+        #   fbgemm-xpu-3.14-wheels-xxx-yyy
+        #   fbgemm-xpu-3.13-wheels-xxx-yyy
         merge-multiple: true
     - name: 'Install prerequisites'
       run: |
@@ -300,11 +348,84 @@ jobs:
         fi
         pytest -rsf -k "${known_failures}" test/
 
+  test-fbgemm:
+    needs: build-fbgemm
+    strategy:
+      matrix:
+        # Testing in minimum and maximum supported versions of python.
+        python-version: [ '3.10', '3.14' ]
+        runner: [ 'bmg', 'dg2' ]
+    runs-on: ${{matrix.runner}}
+    container:
+      image: 'ubuntu:24.04'
+      options: --device /dev/dri:/dev/dri -v /dev/dri/by-path:/dev/dri/by-path
+    env:
+      WHEELS: fbgemm-xpu-${{ matrix.python-version }}-wheels
+    defaults:
+      run:
+        shell: bash -l {0}  # for conda environment activation
+    steps:
+    - name: 'Install prerequisites'
+      run: |
+        apt-get update
+        apt-get install -y \
+          ca-certificates \
+          curl \
+          git \
+          gpg \
+          software-properties-common \
+          wget
+    - name: 'Download wheels'
+      uses: actions/download-artifact@v8
+      with:
+        name: ${{ env.WHEELS }}-${{ env.PR_OR_SHA }}-${{ env.UNIQUE_ID }}
+        path: _wheels/
+    - name: 'Checkout'
+      uses: actions/checkout@v7
+    - name: 'Setup Conda'
+      uses: conda-incubator/setup-miniconda@v4
+      with:
+        # conda configuration
+        auto-update-conda: false
+        channels: conda-forge
+        channel-priority: strict
+        conda-remove-defaults: true
+        miniforge-version: latest
+        use-mamba: true
+        # environment configuration
+        activate-environment: test-env
+        python-version: ${{ matrix.python-version }}
+    - name: 'Install Intel drivers'
+      run: |
+        add-apt-repository -y ppa:kobuk-team/intel-graphics
+        apt-get install -y \
+          libva2 \
+          libze1 \
+          libze-intel-gpu1 \
+          intel-media-va-driver-non-free \
+          intel-opencl-icd
+    - name: 'Install pip'
+      run: |
+        conda install pip
+    - name: 'Install fbgemm-xpu'
+      run: |
+        find _wheels/ -name "*.whl"
+        pip install \
+          "$(ls ./_wheels/${{ env.WHEELS }}-${{ env.PR_OR_SHA }}-${{ env.UNIQUE_ID }}/fbgemm_xpu*.whl)[test]" \
+          --extra-index-url https://download.pytorch.org/whl/xpu
+    - name: 'Test gpu'
+      run: |
+        python -c "import torch; print(torch.xpu.is_available())"
+    - name: 'Test fbgemm-xpu'
+      working-directory: packages/fbgemm-xpu
+      run: |
+        pytest -v test/
+
   publish:
-    needs: [ compose, test-torchcodec ]
+    needs: [ compose, test-torchcodec, test-fbgemm ]
     runs-on: ubuntu-24.04
     permissions:
-      id-token: write    
+      id-token: write
     env:
       WHEELS: torchlib-all-wheels
     steps:
@@ -321,6 +442,7 @@ jobs:
         rm -rf _publish && mkdir _publish
         cp ./_wheels/${{ env.WHEELS }}-${{ env.PR_OR_SHA }}-${{ env.UNIQUE_ID }}/torchcodec_xpu-*.whl _publish/
         cp ./_wheels/${{ env.WHEELS }}-${{ env.PR_OR_SHA }}-${{ env.UNIQUE_ID }}/torchlib_xpu-*.whl _publish/
+        cp ./_wheels/${{ env.WHEELS }}-${{ env.PR_OR_SHA }}-${{ env.UNIQUE_ID }}/fbgemm_xpu-*.whl _publish/
         ls -al _publish/
     - name: Publish package distributions to PyPI
       if: github.event_name == 'release'
@@ -328,73 +450,3 @@ jobs:
       with:
         packages-dir: _publish
 
-  fbgemm-xpu:
-    needs: ffmpeg
-    strategy:
-      matrix:
-        python-version: [ '3.10', '3.11', '3.12', '3.13', '3.14' ]
-    runs-on: ubuntu-24.04
-    env:
-      WHEELS: torchlib-${{ matrix.python-version }}-wheels
-    container:
-      image: 'pytorch/manylinux2_28-builder:xpu-v2.12.0-rc1'
-    steps:
-    - name: 'Checkout'
-      uses: actions/checkout@v7
-    - name: 'Download FFmpeg'
-      uses: actions/download-artifact@v8
-      with:
-        path: ${{ github.workspace }}/_install
-        # The goal is to get the following layout:
-        # _install/
-        #   ffmpeg-x
-        #   ffmpeg-y
-        merge-multiple: true
-    - name: Install uv
-      uses: astral-sh/setup-uv@v7
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: 'Install prerequisites'
-      run: |
-        rpm --import https://repositories.intel.com/gpu/intel-graphics.key
-        dnf install -y libva-devel
-    - name: 'Build the project'
-      env:
-        TORCHCODEC_FFMPEG6_INSTALL_PREFIX: ${{ github.workspace }}/_install/ffmpeg-n6.1.4
-        TORCHCODEC_FFMPEG7_INSTALL_PREFIX: ${{ github.workspace }}/_install/ffmpeg-n7.1.3
-        TORCHCODEC_FFMPEG8_INSTALL_PREFIX: ${{ github.workspace }}/_install/ffmpeg-n8.0.1
-      run: |
-        source /opt/intel/oneapi/setvars.sh
-        uv build --all --index https://download.pytorch.org/whl/xpu -vv
-    - name: 'Repair wheels with auditwheel'
-      run: |
-        uvx auditwheel repair dist/*.whl \
-          --wheel-dir _wheels/${{ env.WHEELS }}-${{ env.PR_OR_SHA }}-${{ env.UNIQUE_ID }} \
-          --exclude "*" --allow-pure-python-wheel
-    - name: 'Test installing wheels'
-      run: |
-        uv venv
-        uv pip install \
-          _wheels/${{ env.WHEELS }}-${{ env.PR_OR_SHA }}-${{ env.UNIQUE_ID }}/*.whl \
-          --index https://download.pytorch.org/whl/xpu -vv
-    - name: 'Test importing torchcodec-xpu with ffmpeg n6'
-      env:
-        LD_LIBRARY_PATH: '${{ github.workspace }}/_install/ffmpeg-n6.1.4/lib'
-      run: |
-        uv run --no-project python -c "import torchcodec_xpu; print(torchcodec_xpu.__version__)"
-    - name: 'Test importing torchcodec-xpu with ffmpeg n7'
-      env:
-        LD_LIBRARY_PATH: '${{ github.workspace }}/_install/ffmpeg-n7.1.3/lib'
-      run: |
-        uv run --no-project python -c "import torchcodec_xpu; print(torchcodec_xpu.__version__)"
-    - name: 'Test importing torchcodec-xpu with ffmpeg n8'
-      env:
-        LD_LIBRARY_PATH: '${{ github.workspace }}/_install/ffmpeg-n8.0.1/lib'
-      run: |
-        uv run --no-project python -c "import torchcodec_xpu; print(torchcodec_xpu.__version__)"
-    - name: 'Upload wheels'
-      uses: actions/upload-artifact@v7
-      with:
-        name: ${{ env.WHEELS }}-${{ env.PR_OR_SHA }}-${{ env.UNIQUE_ID }}
-        path: _wheels
-        compression-level: 0
