@@ -71,32 +71,26 @@ class ForwardSplitGenerator:
     @staticmethod
     def generate_pt2_wrappers() -> None:
         pt2_impl_template = CodeTemplate.load(
-            "training/pt2/embedding_forward_nobag_unweighted_pt2_wrapper_template.sycl"
+            "training/pt2/embedding_forward_nobag_unweighted_pt2_wrapper_template.sycl",
         )
             
         # Generate implementation file
         pt2_impl_template.write(
             f"sycl_kernels/gen_embedding_forward_split_unweighted_nobag_pt2_wrapper.sycl",
+            is_forward=True,
         )
 
 
     @staticmethod
     def generate_small_kernels() -> None:
-        
-        # Generate the SYCL small kernels (for nobag only)
-        sycl_template = CodeTemplate.load(
-            "training/forward/embedding_forward_split_kernel_nobag_small_template.sycl"
-        )
+        # Generate the SYCL small kernel headers (for nobag only).
+        # The operator() implementation is now inlined in the header template,
+        # so no separate .sycl file is generated.
         sycl_header_template = CodeTemplate.load(
             "training/forward/embedding_forward_split_kernel_nobag_small_template.h"
         )
         for dense in [True, False]:
             ddesc = f"{ 'dense' if dense else 'split' }"
-            sycl_template.write(
-                f"sycl_kernels/gen_embedding_forward_{ ddesc }_unweighted_nobag_kernel_small.sycl",
-                dense=dense,
-                is_index_select=False,
-            )
             sycl_header_template.write(
                 f"sycl_kernels/gen_embedding_forward_{ ddesc }_unweighted_nobag_kernel_small.h",
                 dense=dense,
@@ -110,11 +104,9 @@ class ForwardSplitGenerator:
         Generate the SYCL general D kernels (for nobag unweighted, all embedding dimensions)
         These are the main kernel implementations that handle general embedding dimensions.
         Small kernels (D<=32) are generated separately by generate_small_kernels().
+        The kernel implementation (operator()) is inlined in the .h header file.
         """
-        # Load the unified templates for general D kernels
-        sycl_template = CodeTemplate.load(
-            "training/forward/embedding_forward_split_kernel_template.sycl"
-        )
+        # Load the unified header template (contains both class definition and operator() impl)
         sycl_header_template = CodeTemplate.load(
             "training/forward/embedding_forward_split_kernel_template.h"
         )
@@ -123,15 +115,7 @@ class ForwardSplitGenerator:
         for dense in [True, False]:
             ddesc = f"{ 'dense' if dense else 'split' }"
             
-            # Generate .sycl implementation file
-            sycl_template.write(
-                f"sycl_kernels/gen_embedding_forward_{ ddesc }_unweighted_nobag_kernel.sycl",
-                dense=dense,
-                ssd=False,
-                is_index_select=False,
-            )
-            
-            # Generate .h header file
+            # Generate .h header file (contains class definition + inline operator() impl)
             sycl_header_template.write(
                 f"sycl_kernels/gen_embedding_forward_{ ddesc }_unweighted_nobag_kernel.h",
                 dense=dense,
