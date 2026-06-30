@@ -68,7 +68,7 @@
 #include "fbgemm_utils/utils.h"
 #include "fbgemm_utils/pt2_arg_utils.h"
 #include "fbgemm_utils/feature_gates.h"
-#include "sycl_kernels/fbgemm_split_kernels_backward.h"
+#include "fbgemm_utils/tensor_utils.h"
 
 using Tensor = at::Tensor;
 namespace profiler = torch::autograd::profiler;

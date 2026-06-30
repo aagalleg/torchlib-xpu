@@ -101,8 +101,8 @@ TORCH_LIBRARY_FRAGMENT(fbgemm, m) {
 
     // ===== Split Embedding Operators =====
 
-    if (!utils::torch::schemaExists("fbgemm::split_embedding_nobag_backward_dense_unweighted_exact_xpu")) {
-        m.def("split_embedding_nobag_backward_dense_unweighted_exact_xpu("
+    if (!utils::torch::schemaExists("fbgemm::split_embedding_nobag_backward_codegen_dense_unweighted_exact_xpu")) {
+        m.def("split_embedding_nobag_backward_codegen_dense_unweighted_exact_xpu("
             "    Tensor grad_output, "
             "    Tensor(a!) dev_weights, "
             "    Tensor weights_offsets, "

@@ -47,7 +47,6 @@
 
 #include "fbgemm_utils/feature_gates.h"
 #include "fbgemm_utils/utils.h"
-#include "sycl_kernels/fbgemm_dense_kernels_backward.h"
 
 using Tensor = at::Tensor;
 namespace profiler = torch::autograd::profiler;
@@ -55,7 +54,7 @@ namespace profiler = torch::autograd::profiler;
 namespace fbgemm_xpu {
 
 Tensor
-split_embedding_nobag_backward_codegen_dense_unweighted_exact_cuda(
+split_embedding_nobag_backward_codegen_dense_unweighted_exact_xpu(
     const Tensor& grad_output,
     const Tensor& dev_weights,
     const Tensor& weights_offsets,
@@ -97,7 +96,7 @@ Tensor dense_embedding_nobag_forward_unweighted_xpu(
 //   CUDA Equivalent: dense_embedding_nobag_forward_codegen_unweighted_cuda
 //
 // BACKWARD PATH:
-//   Calls: split_embedding_nobag_backward_dense_unweighted_exact_xpu
+//   Calls: split_embedding_nobag_backward_codegen_dense_unweighted_exact_xpu
 //   CUDA Equivalent: split_embedding_nobag_backward_codegen_dense_unweighted_exact_cuda
 //
 ////////////////////////////////////////////////////////////////////////////////
@@ -227,8 +226,8 @@ public torch::autograd::Function<SplitNoBagLookupFunctionDenseOpXPU> {
         
         static auto embedding__unweighted_backward_op =
             torch::Dispatcher::singleton()
-                .findSchemaOrThrow("fbgemm::split_embedding_nobag_backward_dense_unweighted_exact_xpu", "")
-                .typed<decltype(split_embedding_nobag_backward_dense_unweighted_exact_xpu)>();
+                .findSchemaOrThrow("fbgemm::split_embedding_nobag_backward_codegen_dense_unweighted_exact_xpu", "")
+                .typed<decltype(split_embedding_nobag_backward_codegen_dense_unweighted_exact_xpu)>();
 
         grad_dev_weights = embedding__unweighted_backward_op.call(
             grad_output,
