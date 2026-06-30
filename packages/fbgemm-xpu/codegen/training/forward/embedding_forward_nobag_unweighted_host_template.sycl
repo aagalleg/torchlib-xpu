@@ -42,8 +42,8 @@
 
 #include <torch/library.h>
 
-#include "gen_embedding_forward_{{ mdesc }}_unweighted_nobag_kernel_small.sycl"
-#include "gen_embedding_forward_{{ mdesc }}_unweighted_nobag_kernel.sycl"
+#include "gen_embedding_forward_{{ mdesc }}_unweighted_nobag_kernel_small.h"
+#include "gen_embedding_forward_{{ mdesc }}_unweighted_nobag_kernel.h"
 
 using Tensor = at::Tensor;
 
