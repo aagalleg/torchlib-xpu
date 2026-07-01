@@ -22,7 +22,8 @@ on:
       - 'release/**'
   release:
     types:
-      - published      
+      - published
+  workflow_dispatch:
 
 permissions: read-all
 
