@@ -448,7 +448,7 @@ jobs:
       uses: actions/download-artifact@v8
       with:
         name: ${{ env.WHEELS }}-${{ env.PR_OR_SHA }}-${{ env.UNIQUE_ID }}
-        path: _wheels/
+        path: /tmp/_wheels/
     # - name: 'Checkout'
     #   uses: actions/checkout@v7
     - name: 'Setup Conda'
@@ -481,9 +481,9 @@ jobs:
         pwd
         ls -l 
         ls -l _wheels/
-        find _wheels/ -name "*.whl"
+        find /tmp/_wheels/ -name "*.whl"
         pip install \
-          "$(ls ./_wheels/${{ env.WHEELS }}-${{ env.PR_OR_SHA }}-${{ env.UNIQUE_ID }}/fbgemm_xpu*.whl)[test]" \
+          "$(ls /tmp/_wheels/${{ env.WHEELS }}-${{ env.PR_OR_SHA }}-${{ env.UNIQUE_ID }}/fbgemm_xpu*.whl)[test]" \
           --extra-index-url https://download.pytorch.org/whl/xpu
     - name: 'Test gpu'
       run: |
