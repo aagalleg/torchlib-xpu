@@ -478,6 +478,9 @@ jobs:
         conda install pip
     - name: 'Install fbgemm-xpu'
       run: |
+        pwd
+        ls -l 
+        ls -l _wheels/
         find _wheels/ -name "*.whl"
         pip install \
           "$(ls ./_wheels/${{ env.WHEELS }}-${{ env.PR_OR_SHA }}-${{ env.UNIQUE_ID }}/fbgemm_xpu*.whl)[test]" \
