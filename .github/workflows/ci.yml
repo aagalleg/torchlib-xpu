@@ -483,7 +483,7 @@ jobs:
           --extra-index-url https://download.pytorch.org/whl/xpu
     - name: 'Test gpu'
       run: |
-        python -c "import torch; print(torch.xpu.is_available())"
+        python -c "import torch; print(torch.xpu.is_available())" 
     - name: 'Test fbgemm-xpu'
       working-directory: packages/fbgemm-xpu
       run: |
