@@ -13,7 +13,8 @@ import unittest
 import torch
 
 # name for the custom operator module (should match the name in setup.py)
-import fbgemm
+import fbgemm_gpu
+import fbgemm_xpu
 
 SEED = 42
 

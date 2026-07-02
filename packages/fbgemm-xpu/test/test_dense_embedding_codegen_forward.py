@@ -10,7 +10,9 @@ This test suite validates:
 """
 import unittest
 import torch
-import fbgemm
+
+import fbgemm_gpu
+import fbgemm_xpu
 
 SEED = 0
 

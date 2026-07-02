@@ -7,7 +7,9 @@ from types import ModuleType
 from typing import List, Optional
 
 import torch
-import fbgemm  # type: ignore[import]
+
+import fbgemm_gpu
+import fbgemm_xpu
 
 class PoolingMode(enum.IntEnum):
     SUM = 0
