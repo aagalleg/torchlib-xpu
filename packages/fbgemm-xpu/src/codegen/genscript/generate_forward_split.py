@@ -13,13 +13,9 @@ from typing import List
 
 try:
     from .common import CodeTemplate
-    from .optimizer_args import annotation_dict
 except ImportError:
     # pyre-ignore[21]
     from common import CodeTemplate
-
-    # pyre-ignore[21]
-    from optimizer_args import annotation_dict
 
 
 class ForwardSplitGenerator:
