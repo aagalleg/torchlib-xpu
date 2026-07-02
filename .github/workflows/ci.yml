@@ -449,10 +449,6 @@ jobs:
       with:
         name: ${{ env.WHEELS }}-${{ env.PR_OR_SHA }}-${{ env.UNIQUE_ID }}
         path: _wheels/
-    - name: 'Checkout'
-      uses: actions/checkout@v7
-      with:
-        path: torchlib-xpu
     - name: 'Setup Conda'
       uses: conda-incubator/setup-miniconda@v4
       with:
@@ -470,11 +466,9 @@ jobs:
       run: |
         add-apt-repository -y ppa:kobuk-team/intel-graphics
         apt-get install -y \
-          libva2 \
           libze1 \
           libze-intel-gpu1 \
-          intel-media-va-driver-non-free \
-          intel-opencl-icd
+          intel-ocloc
     - name: 'Install pip'
       run: |
         conda install pip
@@ -494,7 +488,7 @@ jobs:
     - name: 'Test fbgemm-xpu'
       working-directory: packages/fbgemm-xpu
       run: |
-        pytest -v test/
+        pytest -rsf test/
 
   publish-fbgemm:
     needs: [ compose-fbgemm, test-fbgemm ]
