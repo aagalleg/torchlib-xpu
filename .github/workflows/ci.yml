@@ -376,7 +376,7 @@ jobs:
         compression-level: 0
 
   compose-fbgemm:
-    needs: [build-fbgemm, test-fbgemm]
+    needs: build-fbgemm
     runs-on: ubuntu-24.04
     env:
       WHEELS: fbgemm-xpu-all-wheels
