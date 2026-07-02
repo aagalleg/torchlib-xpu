@@ -1,16 +1,9 @@
 /*
- * Copyright 2026 Intel Corporation
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Portions of this file are derived from FBGEMM
- * Copyright (c) Meta Platforms, Inc. and affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+ * Copyright (c) 2026 Intel Corporation. All Rights Reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  */
+
 
 {#
 // @lint-ignore LINTIGNORE
@@ -20,10 +13,59 @@
 // so we need to keep lint-ignore-every.
 #}
 
-{%- set host_fn = "split_embedding_nobag_backward_codegen_dense_unweighted_exact_xpu" if dense else "split_embedding_nobag_backward_rowwise_adagrad_unweighted_exact_xpu" %}
-{%- set find_segs_kernel = "SplitEmbeddingBackwardFindLongSegmentsDenseKernel" if dense else "SplitEmbeddingBackwardFindLongSegmentsSplitKernel" %}
-{%- set cta_kernel = "SplitEmbeddingNobagBackwardDenseUnweightedKernelCtaPerRow" if dense else "SplitEmbeddingNobagBackwardRowwiseAdagradUnweightedKernelCTAPerRow" %}
-{%- set warp_kernel = "SplitEmbeddingNobagBackwardDenseUnweightedKernelWarpPerRow1" if dense else "SplitEmbeddingNobagBackwardRowwiseAdagradUnweightedKernelWarpPerRow" %}
+{%- set optimizer = "Dense" if dense else "RowwiseAdagrad" %}
+{%- set host_fn = "dense" if dense else "rowwise_adagrad" %}
+{%- set find_segs_kernel = "Dense" if dense else "Split" %}
+
+////////////////////////////////////////////////////////////////////////////////
+// SYCL PORT MAPPING TO FBGEMM CUDA SOURCE - BACKWARD HOST DISPATCH
+////////////////////////////////////////////////////////////////////////////////
+//
+// This file contains the SYCL port of the FBGEMM {{ "dense" if dense else "split" }} embedding
+// backward host dispatch function for no-bag (sequence) unweighted lookups
+// with {{ "no" if dense else optimizer }} optimizer.
+//
+// ORIGINAL CUDA SOURCE:
+//   Template: fbgemm_gpu/codegen/training/backward/embedding_backward_split_template.cu
+//   Generated Source: fbgemm_gpu/_skbuild/linux-x86_64-3.10/cmake-build/gen_embedding_backward_{{ "dense" if dense else "rowwise_adagrad" }}_split_unweighted_exact_cuda.cu
+//
+// HOST FUNCTION MAPPING:
+//   split_embedding_nobag_backward_codegen_{{ host_fn }}_unweighted_exact_xpu
+//     → split_embedding_nobag_backward_codegen_{{ host_fn }}_unweighted_exact_cuda (CUDA)
+//
+// KERNEL DISPATCH STRATEGY:
+//   Step 1 - Segment classification (preprocessing):
+//     SplitEmbeddingBackwardFindLongSegments{{ find_segs_kernel }}Kernel
+//       Classifies each run (unique embedding index) as short or long based on
+//       max_segment_length_per_warp and fills long_run_ids for the CTA kernel.
+//
+//   Step 2 - Long segments (SL >= max_segment_length_per_warp):
+//     SplitEmbeddingNobagBackwardCodegen{{ optimizer }}UnweightedKernelCtaPerRow
+//       One CTA processes all gradient contributions for one embedding row.
+//       Source: gen_embedding_backward_{{ "dense" if dense else "rowwise_adagrad" }}_split_unweighted_nobag_kernels.h
+//
+//   Step 3 - Short segments (SL < max_segment_length_per_warp):
+//     SplitEmbeddingNobagBackwardCodegen{{ optimizer }}UnweightedKernelWarpPerRow
+//       One sub-group (warp) processes one embedding row.
+//       Source: gen_embedding_backward_{{ "dense" if dense else "rowwise_adagrad" }}_split_unweighted_nobag_kernels.h
+//
+// DESCRIPTION:
+//   Host function for no-bag (sequence) embedding backward pass without pooling.
+//   Sorts indices via transpose_embedding_input to group identical embedding
+//   lookups together (run-length encoding). Then:
+//     1. Classifies runs into short vs. long via the find-long-segments kernel.
+//     2. Launches the CTA-per-row kernel for long runs (launched first for
+//        pipelining, matching CUDA source order).
+//     3. Launches the warp-per-row kernel for short runs.
+{%- if not dense %}
+//   Uses rowwise Adagrad for optimizer updates. Supports stochastic rounding,
+//   LXU cache lookups for UVM-managed tables, and L2 / decoupled weight decay.
+{%- else %}
+//   Dense path: no optimizer. Accumulates gradients into grad_dev_weights,
+//   which is returned as the output gradient tensor.
+{%- endif %}
+//
+////////////////////////////////////////////////////////////////////////////////
 
 {%  if dense %}
 
@@ -39,13 +81,13 @@ using Tensor = at::Tensor;
 namespace fbgemm_xpu {
 
 namespace {
-class {{ find_segs_kernel }};
+class SplitEmbeddingBackwardFindLongSegments{{ find_segs_kernel }}Kernel;
 }
 
 #define DISPATCH_PLACEHOLDER_TYPES(NAME, ...) \
     return __VA_ARGS__();
 
-    Tensor {{ host_fn }}(
+    Tensor split_embedding_nobag_backward_codegen_{{ host_fn }}_unweighted_exact_xpu(
         const Tensor& grad_output,
         const Tensor& dev_weights,
         {%  if not dense %}
@@ -182,7 +224,7 @@ class {{ find_segs_kernel }};
         if (lxu_cache_locations.size(0) > 0) {
             lxu_cache_locations_sorted = at::empty_like(lxu_cache_locations);
             // size_t temp_storage_bytes = 0;
-            AT_DISPATCH_INDEX_TYPES(indices.scalar_type(), "split_embedding_nobag_backward_rowwise_adagrad_unweighted_exact_xpu_1", [&] {
+            AT_DISPATCH_INDEX_TYPES(indices.scalar_type(), "split_embedding_nobag_backward_codegen_{{ host_fn }}d_unweighted_exact_xpu_1", [&] {
                 auto sorted = at::sort(linear_indices, 0, false);
                 linear_indices_sorted.copy_(std::get<0>(sorted));
                 auto permutation = std::get<1>(sorted);
@@ -193,7 +235,7 @@ class {{ find_segs_kernel }};
         table_unique_indices_offsets = at::zeros_like(weights_placements);
         {%  endif %}
 
-        AT_DISPATCH_INDEX_TYPES(indices.scalar_type(), "{{ host_fn }}_2", [&] {
+        AT_DISPATCH_INDEX_TYPES(indices.scalar_type(), "split_embedding_nobag_backward_codegen_{{ host_fn }}_unweighted_exact_xpu_2", [&] {
         DISPATCH_EMB_GRAD_CACHE_TYPES(
             dev_weights.scalar_type(),
             aligned_grad_output.scalar_type(),
@@ -202,7 +244,7 @@ class {{ find_segs_kernel }};
             {%  else %}
             lxu_cache_weights.scalar_type(),
             {%  endif %}
-                "{{ host_fn }}",
+                "split_embedding_nobag_backward_codegen_{{ host_fn }}_unweighted_exact_xpu",
             [&] {
 
                 // early memory release
@@ -250,8 +292,10 @@ class {{ find_segs_kernel }};
                     size_t local_range = kMaxThreads;
                     size_t global_range = div_round_up(static_cast<size_t>(total_unique_indices), local_range) * local_range;
 
+                    // Step 1: Classify runs into short (warp-per-row) and long (CTA-per-row).
+                    // Fills long_run_ids with the run IDs exceeding max_segment_length_per_warp.
                     queue.submit([&](sycl::handler& cgh) {
-                        cgh.parallel_for<{{ find_segs_kernel }}>(
+                        cgh.parallel_for<SplitEmbeddingBackwardFindLongSegments{{ find_segs_kernel }}Kernel>(
                             sycl::nd_range<1>(
                                 global_range,
                                 local_range),
@@ -279,11 +323,8 @@ class {{ find_segs_kernel }};
                     [&] {
 
                     {%  endif %}
-                        // Launch cta-per-row kernel for long runs first (matching CUDA order).
-                        {%  if dense %}
-                        // Original template symbol:
-                        // split_embedding_nobag_backward_dense_unweighted_kernel_cta_per_row_1
-                        {%  endif %}
+                        // Step 2: CTA-per-row kernel — long segments (SL >= max_segment_length_per_warp).
+                        // CUDA equivalent: split_embedding_nobag_backward_codegen_{{ "dense" if dense else "rowwise_adagrad" }}_unweighted_kernel_cta_per_row_1
                         constexpr auto kCacheAccBytes = sizeof(at::acc_type<cache_t, true>);
 
                         int32_t num_cta_per_row_groups = kMaxThreads / kThreadGroupSize;
@@ -315,7 +356,7 @@ class {{ find_segs_kernel }};
                             auto smem = sycl::local_accessor<cache_t, 1>(
                                 cta_per_row_smem_bytes / sizeof(cache_t),
                                 cgh);
-                            cgh.parallel_for<{{ cta_kernel }}<emb_t, grad_t, cache_t, index_t, kFixedMaxVecsPerThread, kThreadGroupSize, kUseVecBlocking>>(
+                            cgh.parallel_for<SplitEmbeddingNobagBackwardCodegen{{ optimizer }}UnweightedKernelCtaPerRow<emb_t, grad_t, cache_t, index_t, kFixedMaxVecsPerThread, kThreadGroupSize, kUseVecBlocking>>(
                                 sycl::nd_range<2>(
                                     sycl::range<2>(
                                         {%  if dense %}
@@ -328,7 +369,7 @@ class {{ find_segs_kernel }};
                                         c_local_y, c_local_x)
                                         {%  endif %}
                                 ),
-                                {{ cta_kernel }}<emb_t, grad_t, cache_t, index_t, kFixedMaxVecsPerThread, kThreadGroupSize, kUseVecBlocking>(
+                                SplitEmbeddingNobagBackwardCodegen{{ optimizer }}UnweightedKernelCtaPerRow<emb_t, grad_t, cache_t, index_t, kFixedMaxVecsPerThread, kThreadGroupSize, kUseVecBlocking>(
                                     grad_output_accessor,
                                     dev_weights.packed_accessor64<emb_t, 1, RestrictPtrTraits>(),
                                     {%  if not dense %}
@@ -377,11 +418,8 @@ class {{ find_segs_kernel }};
                             );
                         });
 
-                        // Launch warp-per-row kernel for short runs (matching CUDA order).
-                        {%  if dense %}
-                        // Original template symbol:
-                        // split_embedding_nobag_backward_dense_unweighted_kernel_warp_per_row_1
-                        {%  endif %}
+                        // Step 3: Warp-per-row kernel — short segments (SL < max_segment_length_per_warp).
+                        // CUDA equivalent: split_embedding_nobag_backward_codegen_{{ "dense" if dense else "rowwise_adagrad" }}_unweighted_kernel_warp_per_row_1
                         int32_t num_warp_per_row_groups = kBackwardMaxThreads / kThreadGroupSize;
                         int32_t warp_per_row_smem_bytes = 0;
                         if constexpr (kUseVecBlocking) {
@@ -411,7 +449,7 @@ class {{ find_segs_kernel }};
                             sycl::local_accessor<cache_t, 1> smem(
                                 kUseVecBlocking ? (warp_per_row_smem_bytes / sizeof(cache_t)) : 0,
                                 cgh);
-                            cgh.parallel_for<{{ warp_kernel }}<emb_t, grad_t, cache_t, index_t, kFixedMaxVecsPerThread, kThreadGroupSize, kUseVecBlocking>>(
+                            cgh.parallel_for<SplitEmbeddingNobagBackwardCodegen{{ optimizer }}UnweightedKernelWarpPerRow<emb_t, grad_t, cache_t, index_t, kFixedMaxVecsPerThread, kThreadGroupSize, kUseVecBlocking>>(
                                 sycl::nd_range<2>(
                                     sycl::range<2>(
                                         {%  if dense %}
@@ -428,7 +466,7 @@ class {{ find_segs_kernel }};
                                         w_local_x)
                                         {%  endif %}
                                 ),
-                                {{ warp_kernel }}<emb_t, grad_t, cache_t, index_t, kFixedMaxVecsPerThread, kThreadGroupSize, kUseVecBlocking>(
+                                SplitEmbeddingNobagBackwardCodegen{{ optimizer }}UnweightedKernelWarpPerRow<emb_t, grad_t, cache_t, index_t, kFixedMaxVecsPerThread, kThreadGroupSize, kUseVecBlocking>(
                                     grad_output_accessor,
                                     dev_weights.packed_accessor64<emb_t, 1, RestrictPtrTraits>(),
                                     {%  if not dense %}
@@ -491,5 +529,5 @@ class {{ find_segs_kernel }};
 } // namespace fbgemm_xpu
 
 TORCH_LIBRARY_IMPL(fbgemm, XPU, m) {
-    m.impl("{{ host_fn }}", &fbgemm_xpu::{{ host_fn }});
+    m.impl("split_embedding_nobag_backward_codegen_{{ host_fn }}_unweighted_exact_xpu", &fbgemm_xpu::split_embedding_nobag_backward_codegen_{{ host_fn }}_unweighted_exact_xpu);
 }

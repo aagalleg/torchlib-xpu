@@ -1,14 +1,6 @@
 /*
- * Copyright 2026 Intel Corporation
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Portions of this file are derived from FBGEMM
- * Copyright (c) Meta Platforms, Inc. and affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+ * Copyright (c) 2026 Intel Corporation. All Rights Reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
@@ -20,8 +12,8 @@
 // with PT2 (PyTorch 2.0) compilation support and rowwise Adagrad optimizer.
 //
 // ORIGINAL CUDA SOURCE:
-//   File: fbgemm_gpu/_skbuild/linux-x86_64-3.10/cmake-build/gen_embedding_split_rowwise_adagrad_pt2_autograd.cpp
-//   Template: fbgemm_gpu/codegen/training/pt2/embedding_split_host_pt2_autograd_template.cpp
+//   Template Path: fbgemm_gpu/codegen/training/pt2/embedding_split_host_pt2_autograd_template.cpp
+//   Generated File: fbgemm_gpu/_skbuild/linux-x86_64-3.10/cmake-build/gen_embedding_split_rowwise_adagrad_pt2_autograd.cpp
 //
 // AUTOGRAD FUNCTION MAPPING:
 //   SplitNoBagLookupFunction_rowwise_adagrad_Op_pt2 (SYCL)
@@ -36,13 +28,13 @@
 //   This file implements the PyTorch autograd function for split embeddings
 //   with rowwise Adagrad optimizer. It handles:
 //   - Forward pass: Delegates to split_embedding_nobag_forward_unweighted_xpu
-//   - Backward pass: Delegates to split_embedding_nobag_backward_rowwise_adagrad_unweighted_exact_xpu
+//   - Backward pass: Delegates to split_embedding_nobag_backward_codegen_rowwise_adagrad_unweighted_exact_xpu
 //   - Supports PT2 compilation with SymInt and compile guards
 //   - Integrates with Kineto profiler for performance analysis
 //
 // PYTORCH DISPATCHER REGISTRATION:
 //   - Forward operator: fbgemm::split_embedding_nobag_codegen_forward_unweighted_pt2_wrapper
-//   - Backward operator: fbgemm::split_embedding_nobag_backward_rowwise_adagrad_unweighted_pt2_wrapper
+//   - Backward operator: fbgemm::split_embedding_nobag_backward_codegen_rowwise_adagrad_unweighted_pt2_wrapper
 //   - Autograd function: fbgemm::split_embedding_codegen_lookup_rowwise_adagrad_function_pt2
 //   - Dispatch key: AutogradXPU (registered via TORCH_LIBRARY_IMPL)
 //
@@ -50,10 +42,6 @@
 //       are not yet supported in the SYCL implementation.
 //
 ////////////////////////////////////////////////////////////////////////////////
-
-/*
- * SYCL/XPU Implementation of split embedding lookup operations
- */
 
 #pragma once
 
@@ -375,7 +363,7 @@ static torch::autograd::variable_list backward(
       
     static auto embedding_unweighted_backward_op =
         torch::Dispatcher::singleton()
-            .findSchemaOrThrow("fbgemm::split_embedding_nobag_backward_rowwise_adagrad_unweighted_pt2_wrapper", "")
+            .findSchemaOrThrow("fbgemm::split_embedding_nobag_backward_codegen_rowwise_adagrad_unweighted_pt2_wrapper", "")
             .typed<Tensor(
                 const Tensor& /*grad_output*/,
                 const Tensor& /*weights_host*/,

@@ -167,8 +167,8 @@ TORCH_LIBRARY_FRAGMENT(fbgemm, m) {
             );
     }
 
-    if (!utils::torch::schemaExists("fbgemm::split_embedding_nobag_backward_rowwise_adagrad_unweighted_exact_xpu")) {
-        m.def("split_embedding_nobag_backward_rowwise_adagrad_unweighted_exact_xpu("
+    if (!utils::torch::schemaExists("fbgemm::split_embedding_nobag_backward_codegen_rowwise_adagrad_unweighted_exact_xpu")) {
+        m.def("split_embedding_nobag_backward_codegen_rowwise_adagrad_unweighted_exact_xpu("
             "    Tensor grad_output, "
             "    Tensor(a!) dev_weights, "
             "    Tensor(b!) uvm_weights, "
@@ -219,8 +219,8 @@ TORCH_LIBRARY_FRAGMENT(fbgemm, m) {
         );
     }
 
-    if (!utils::torch::schemaExists("fbgemm::split_embedding_nobag_backward_rowwise_adagrad_unweighted_pt2_wrapper")) {
-        m.def("split_embedding_nobag_backward_rowwise_adagrad_unweighted_pt2_wrapper("
+    if (!utils::torch::schemaExists("fbgemm::split_embedding_nobag_backward_codegen_rowwise_adagrad_unweighted_pt2_wrapper")) {
+        m.def("split_embedding_nobag_backward_codegen_rowwise_adagrad_unweighted_pt2_wrapper("
             "    Tensor grad_output, "
             "    Tensor(a!) host_weights, "
             "    Tensor(b!) dev_weights, "

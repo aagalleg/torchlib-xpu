@@ -1,14 +1,6 @@
 /*
- * Copyright 2026 Intel Corporation
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Portions of this file are derived from FBGEMM
- * Copyright (c) Meta Platforms, Inc. and affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+ * Copyright (c) 2026 Intel Corporation. All Rights Reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
@@ -20,36 +12,33 @@
 // so we need to keep lint-ignore-every.
 #}
 
-{%- set mdesc = "dense" if dense else ("ssd" if ssd else "split") %}
+{%- set mdesc = "dense" if dense else "split" %}
 
 ////////////////////////////////////////////////////////////////////////////////
 // SYCL PORT MAPPING TO FBGEMM CUDA SOURCE - FORWARD KERNELS
 ////////////////////////////////////////////////////////////////////////////////
 //
-// This file contains SYCL ports of FBGEMM {{ mdesc }} embedding forward kernels.
+// This file contains SYCL port of FBGEMM {{ mdesc }} embedding lookup forward 
+// unweighted kernel.
 //
 // ORIGINAL CUDA SOURCE:
-//   File: fbgemm_gpu/_skbuild/linux-x86_64-3.10/cmake-build/gen_embedding_forward_{{ mdesc }}_unweighted_nobag_kernel.cu
 //   Template: fbgemm_gpu/codegen/training/forward/embedding_forward_split_kernel_template.cu
+//   Generated Source: fbgemm_gpu/_skbuild/linux-x86_64-3.10/cmake-build/gen_embedding_forward_{{ mdesc }}_unweighted_nobag_kernel.cu
 //
 // KERNEL MAPPING:
-//   {{ mdesc | capitalize }}EmbeddingNobagForwardUnweightedKernel
+//   {{ mdesc | capitalize }}EmbeddingNobagCodegenForwardUnweightedKernel
 //     → {{ mdesc }}_embedding_nobag_codegen_forward_unweighted_kernel (CUDA)
 //
-// HOST FUNCTION MAPPING:
-//   {{ mdesc }}_embedding_nobag_forward_unweighted_xpu
-//     → {{ mdesc }}_embedding_nobag_codegen_forward_unweighted_cuda (CUDA)
-//     CUDA File: fbgemm_gpu/_skbuild/linux-x86_64-3.10/cmake-build/gen_embedding_forward_{{ mdesc }}_unweighted_codegen_cuda.cu
-//     CUDA Template: fbgemm_gpu/codegen/training/forward/embedding_forward_split_template.cu
-//
-// NOTE: The "codegen" string is removed from SYCL implementation names
-//       for consistency with the refactored naming convention.
+// DESCRIPTION:
+//   Main forward kernel for no-bag embeddings (sequence embeddings).
+{%- if not dense %}
+//   Supports cache-aware lookups with LXU cache for UVM-managed tables.
+{%- else %}
+//   Each thread retrieves one embedding vector and copies to output.
+{%- endif %}
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-/*
- * SYCL/XPU Implementation of {{ mdesc }} embedding forward kernel headers
- */
 
 #pragma once
 
@@ -89,24 +78,6 @@ using at::native::RestrictPtrTraits;
 
 namespace fbgemm_xpu {
 
-    ////////////////////////////////////////////////////////////////////////////////
-    // {{ mdesc | capitalize }}EmbeddingNobagForwardUnweightedKernel - Device Kernel
-    ////////////////////////////////////////////////////////////////////////////////
-    //
-    // CUDA SOURCE MAPPING:
-    //   CUDA Kernel: {{ mdesc }}_embedding_nobag_codegen_forward_unweighted_kernel
-    //   CUDA File: fbgemm_gpu/_skbuild/linux-x86_64-3.10/cmake-build/gen_embedding_forward_{{ mdesc }}_unweighted_nobag_kernel.cu
-    //   CUDA Template: fbgemm_gpu/codegen/training/forward/embedding_forward_split_kernel_template.cu
-    //
-    // DESCRIPTION:
-    //   Main forward kernel for no-bag embeddings (sequence embeddings).
-    {%- if not dense %}
-    //   Supports cache-aware lookups with LXU cache for UVM-managed tables.
-    {%- else %}
-    //   Each thread retrieves one embedding vector and copies to output.
-    {%- endif %}
-    //
-    ////////////////////////////////////////////////////////////////////////////////
     template <
     typename emb_t,
     typename cache_t,
@@ -116,9 +87,9 @@ namespace fbgemm_xpu {
     {%- endif %}
     typename index_t,
     size_t kThreadGroupSize>
-    class {{ mdesc | capitalize }}EmbeddingNobagForwardUnweightedKernel {
+    class {{ mdesc | capitalize }}EmbeddingNobagCodegenForwardUnweightedKernel {
         public:
-            {{ mdesc | capitalize }}EmbeddingNobagForwardUnweightedKernel(
+            {{ mdesc | capitalize }}EmbeddingNobagCodegenForwardUnweightedKernel(
                 const at::PackedTensorAccessor64<emb_t, 1, RestrictPtrTraits> dev_weights,
                 {%- if not dense %}
                 const at::PackedTensorAccessor64<emb_t, 1, RestrictPtrTraits> uvm_weights,
@@ -182,7 +153,7 @@ namespace fbgemm_xpu {
     {%- endif %}
     typename index_t,
     size_t kThreadGroupSize>
-    inline void {{ mdesc | capitalize }}EmbeddingNobagForwardUnweightedKernel<emb_t, cache_t, output_t, {%- if not dense %}use_lxu_cache, {%- endif %}index_t, kThreadGroupSize>
+    inline void {{ mdesc | capitalize }}EmbeddingNobagCodegenForwardUnweightedKernel<emb_t, cache_t, output_t, {%- if not dense %}use_lxu_cache, {%- endif %}index_t, kThreadGroupSize>
     ::operator()(const sycl::nd_item<2>& item) const {
 
         const auto threadIdx_x = item.get_local_id(1);
@@ -443,74 +414,5 @@ namespace fbgemm_xpu {
             {%- endif %}
         } // for b_t
     }
-
-
-    ////////////////////////////////////////////////////////////////////////////////
-    // {{ mdesc }}_embedding_nobag_forward_unweighted_xpu - Host Function
-    ////////////////////////////////////////////////////////////////////////////////
-    //
-    // CUDA SOURCE MAPPING:
-    //   CUDA Function: {{ mdesc }}_embedding_nobag_codegen_forward_unweighted_cuda
-    //   CUDA File: fbgemm_gpu/_skbuild/linux-x86_64-3.10/cmake-build/gen_embedding_forward_{{ mdesc }}_unweighted_codegen_cuda.cu
-    //   CUDA Template: fbgemm_gpu/codegen/training/forward/embedding_forward_split_template.cu
-    //
-    // DESCRIPTION:
-    //   Host function for no-bag embedding forward pass.
-    //   Retrieves embedding vectors without pooling (sequence embeddings).
-    //   Dispatches to optimized kernel based on embedding dimension size.
-    //
-    ////////////////////////////////////////////////////////////////////////////////
-    Tensor {{ mdesc }}_embedding_nobag_forward_unweighted_xpu(
-        const Tensor& dev_weights,
-        {%- if not dense %}
-        const Tensor& uvm_weights,
-        const Tensor& lxu_cache_weights,
-        const Tensor& weights_placements,
-        {%- endif %}
-        const Tensor& weights_offsets,
-        const c10::SymInt D_,
-        const Tensor& indices,
-        const Tensor& offsets,
-        {%- if not dense %}
-        const Tensor& lxu_cache_locations,
-        const Tensor& uvm_cache_stats,
-        {%- endif %}
-        const int64_t output_dtype,
-        const bool is_experimental
-    );
-
-    {%- if not dense %}
-    ////////////////////////////////////////////////////////////////////////////////
-    // split_embedding_nobag_forward_unweighted_pt2_xpu_wrapper - PT2 Wrapper
-    ////////////////////////////////////////////////////////////////////////////////
-    //
-    // CUDA SOURCE MAPPING:
-    //   CUDA Function: split_embedding_nobag_codegen_forward_unweighted_pt2_cuda_wrapper
-    //   CUDA File: fbgemm_gpu/_skbuild/linux-x86_64-3.10/cmake-build/gen_embedding_forward_split_pt2_cuda_wrapper.cpp
-    //   CUDA Template: fbgemm_gpu/codegen/training/pt2/embedding_split_host_pt2_cuda_wrapper_template.cpp
-    //
-    // DESCRIPTION:
-    //   PT2 (PyTorch 2.0) compilation wrapper for split embedding forward pass.
-    //   Dispatches to split_embedding_nobag_forward_unweighted_xpu via PyTorch dispatcher.
-    //   Supports SymInt for dynamic shapes and compile-time optimization.
-    //
-    ////////////////////////////////////////////////////////////////////////////////
-    Tensor split_embedding_nobag_forward_unweighted_pt2_xpu_wrapper(
-        const Tensor& /*host_weights*/,
-        const Tensor& dev_weights,
-        const Tensor& uvm_weights,
-        const Tensor& lxu_cache_weights,
-        const Tensor& weights_placements,
-        const Tensor& weights_offsets,
-        const c10::SymInt D,
-        const Tensor& hash_size_cumsum,
-        const Tensor& indices,
-        const Tensor& offsets,
-        const Tensor& lxu_cache_locations,
-        const Tensor& uvm_cache_stats,
-        const bool is_experimental,
-        const int64_t output_dtype
-    );
-    {%- endif %}
 
 } // namespace fbgemm_xpu

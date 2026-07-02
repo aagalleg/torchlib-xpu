@@ -1,14 +1,6 @@
 /*
- * Copyright 2026 Intel Corporation
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Portions of this file are derived from FBGEMM
- * Copyright (c) Meta Platforms, Inc. and affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+ * Copyright (c) 2026 Intel Corporation. All Rights Reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
@@ -18,20 +10,19 @@
 // clang-format off
 #}
 
-{%- set fwd_mdesc = "split" %}
-{%- set bwd_mdesc = "split" %}
+{%- set mdesc = "split" %}
 {%- set optimizer = "rowwise_adagrad" %}
 
 ////////////////////////////////////////////////////////////////////////////////
-// PT2 WRAPPER IMPLEMENTATION - {{ fwd_mdesc | upper }} EMBEDDING NOBAG UNWEIGHTED
+// PT2 WRAPPER IMPLEMENTATION - {{ mdesc | upper }} EMBEDDING NOBAG UNWEIGHTED
 ////////////////////////////////////////////////////////////////////////////////
 //
 // CUDA SOURCE MAPPING:
 //   CUDA Template: pt2/embedding_split_host_pt2_cuda_wrapper_template.cpp
 //
 // Codegen file output:
-//   gen_embedding_forward_{{ fwd_mdesc }}_nobag_unweighted_pt2_xpu_wrapper.sycl
-//   gen_embedding_backward_{{ bwd_mdesc }}_{{ optimizer }}_nobag_unweighted_pt2_xpu_wrapper.sycl
+//   gen_embedding_forward_{{ mdesc }}_nobag_unweighted_pt2_xpu_wrapper.sycl
+//   gen_embedding_backward_{{ mdesc }}_{{ optimizer }}_nobag_unweighted_pt2_xpu_wrapper.sycl
 //
 // DESCRIPTION:
 //   PT2 (PyTorch 2.0) compilation wrapper implementation for split embedding (nobag, unweighted).
@@ -50,7 +41,7 @@ namespace fbgemm_xpu {
 
 {%- if is_forward %}
     ////////////////////////////////////////////////////////////////////////////////
-    // {{ fwd_mdesc }}_embedding_nobag_forward_unweighted_pt2_xpu_wrapper
+    // {{ mdesc }}_embedding_nobag_forward_unweighted_pt2_xpu_wrapper
     ////////////////////////////////////////////////////////////////////////////////
     //
     // IMPLEMENTATION:
@@ -59,7 +50,7 @@ namespace fbgemm_xpu {
     //
     ////////////////////////////////////////////////////////////////////////////////
 
-    Tensor {{ fwd_mdesc }}_embedding_nobag_codegen_forward_unweighted_pt2_xpu_wrapper(
+    Tensor {{ mdesc }}_embedding_nobag_codegen_forward_unweighted_pt2_xpu_wrapper(
         const Tensor& /*host_weights*/,
         const Tensor& dev_weights,
         const Tensor& uvm_weights,
@@ -77,7 +68,7 @@ namespace fbgemm_xpu {
         ){
         static auto op =
             torch::Dispatcher::singleton()
-                .findSchemaOrThrow("fbgemm::{{ fwd_mdesc }}_embedding_nobag_forward_unweighted_xpu", "")
+                .findSchemaOrThrow("fbgemm::{{ mdesc }}_embedding_nobag_forward_unweighted_xpu", "")
                 .typed<Tensor(
                     const Tensor& /*host_weights*/,
                     const Tensor& /*dev_weights*/,
@@ -112,7 +103,7 @@ namespace fbgemm_xpu {
 {%- else %}
 
     ////////////////////////////////////////////////////////////////////////////////
-    // {{ bwd_mdesc }}_embedding_nobag_backward_{{ optimizer }}_unweighted_pt2_xpu_wrapper
+    // {{ mdesc }}_embedding_nobag_backward_codegen_{{ optimizer }}_unweighted_pt2_xpu_wrapper
     ////////////////////////////////////////////////////////////////////////////////
     //
     // IMPLEMENTATION:
@@ -121,7 +112,7 @@ namespace fbgemm_xpu {
     //
     ////////////////////////////////////////////////////////////////////////////////
 
-    Tensor {{ bwd_mdesc }}_embedding_nobag_backward_{{ optimizer }}_unweighted_pt2_xpu_wrapper(
+    Tensor {{ mdesc }}_embedding_nobag_backward_codegen_{{ optimizer }}_unweighted_pt2_xpu_wrapper(
         const Tensor& grad_output,
         const Tensor& /*host_weights*/,
         const Tensor& dev_weights,
@@ -155,7 +146,7 @@ namespace fbgemm_xpu {
         ){
         static auto op =
             torch::Dispatcher::singleton()
-                .findSchemaOrThrow("fbgemm::{{ bwd_mdesc }}_embedding_nobag_backward_{{ optimizer }}_unweighted_exact_xpu", "")
+                .findSchemaOrThrow("fbgemm::{{ mdesc }}_embedding_nobag_backward_codegen_{{ optimizer }}_unweighted_exact_xpu", "")
                 .typed<Tensor(
                         const Tensor& /*grad_output*/,
                         const Tensor& /*dev_weights*/,
@@ -219,7 +210,7 @@ namespace fbgemm_xpu {
         );
     }
 
-{%- endif %} {#-/* if is_forward */#}
+{%- endif %}
 
 } // namespace fbgemm_xpu
 
@@ -228,10 +219,10 @@ namespace fbgemm_xpu {
 ////////////////////////////////////////////////////////////////////////////////
 TORCH_LIBRARY_IMPL(fbgemm, XPU, m) {
 {%- if is_forward %}
-    m.impl("{{ fwd_mdesc }}_embedding_nobag_codegen_forward_unweighted_pt2_wrapper",
-        &fbgemm_xpu::{{ fwd_mdesc }}_embedding_nobag_codegen_forward_unweighted_pt2_xpu_wrapper);
+    m.impl("{{ mdesc }}_embedding_nobag_codegen_forward_unweighted_pt2_wrapper",
+        &fbgemm_xpu::{{ mdesc }}_embedding_nobag_codegen_forward_unweighted_pt2_xpu_wrapper);
 {%- else %}
-    m.impl("{{ bwd_mdesc }}_embedding_nobag_backward_{{ optimizer }}_unweighted_pt2_wrapper",
-        &fbgemm_xpu::{{ bwd_mdesc }}_embedding_nobag_backward_{{ optimizer }}_unweighted_pt2_xpu_wrapper);
-{%- endif %} {#-/* if is_forward */#}
+    m.impl("{{ mdesc }}_embedding_nobag_backward_codegen_{{ optimizer }}_unweighted_pt2_wrapper",
+        &fbgemm_xpu::{{ mdesc }}_embedding_nobag_backward_codegen_{{ optimizer }}_unweighted_pt2_xpu_wrapper);
+{%- endif %}
 }

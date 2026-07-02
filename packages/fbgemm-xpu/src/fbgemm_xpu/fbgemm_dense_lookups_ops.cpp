@@ -1,14 +1,6 @@
 /*
- * Copyright 2026 Intel Corporation
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Portions of this file are derived from FBGEMM
- * Copyright (c) Meta Platforms, Inc. and affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+ * Copyright (c) 2026 Intel Corporation. All Rights Reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
@@ -19,10 +11,8 @@
 // This file is a SYCL port of the FBGEMM dense embedding lookup operators.
 //
 // ORIGINAL CUDA SOURCE:
-//   Template: embedding_backward_split_host_template.cpp
-//   Template Path: FBGEMM/fbgemm_gpu/codegen/training/backward/
-//   Generated: gen_embedding_backward_split_dense.cpp
-//   CUDA Path: FBGEMM/fbgemm_gpu/_skbuild/linux-x86_64-3.10/cmake-build/ (generated files)
+//   Template Path: FBGEMM/fbgemm_gpu/codegen/training/backward/embedding_backward_split_host_template.cpp 
+//   Generated File: fbgemm_gpu/_skbuild/linux-x86_64-3.10/cmake-build/gen_embedding_backward_split_dense.cpp
 //
 // ARCHITECTURE OVERVIEW:
 //   - Main entry: split_embedding_lookup_dense_function (Host Wrapper)

@@ -1,14 +1,6 @@
 /*
- * Copyright 2026 Intel Corporation
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Portions of this file are derived from FBGEMM
- * Copyright (c) Meta Platforms, Inc. and affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+ * Copyright (c) 2026 Intel Corporation. All Rights Reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
@@ -20,7 +12,45 @@
 
 {%- set mdesc = "dense" if dense else "split" %}
 
-#pragma once
+////////////////////////////////////////////////////////////////////////////////
+// SYCL PORT MAPPING TO FBGEMM CUDA SOURCE - FORWARD HOST DISPATCH
+////////////////////////////////////////////////////////////////////////////////
+//
+// This file contains the SYCL port of the FBGEMM {{ mdesc }} embedding forward
+// host dispatch function for no-bag (sequence) unweighted lookups.
+//
+// ORIGINAL CUDA SOURCE:
+//   Template: fbgemm_gpu/codegen/training/forward/embedding_forward_split_template.cu
+//   Generated Source: fbgemm_gpu/_skbuild/linux-x86_64-3.10/cmake-build/gen_embedding_forward_{{ mdesc }}_unweighted_codegen_cuda.cu
+//
+// HOST FUNCTION MAPPING:
+//   {{ mdesc }}_embedding_nobag_forward_unweighted_xpu
+//     → {{ mdesc }}_embedding_nobag_codegen_forward_unweighted_cuda (CUDA)
+//
+// KERNEL DISPATCH STRATEGY:
+//   Small kernel (D <= 32):
+//     {{ mdesc | capitalize }}EmbeddingNobagCodegenForwardUnweightedSmallKernel
+//       → {{ mdesc }}_embedding_nobag_codegen_forward_unweighted_small_kernel (CUDA)
+//       Source: gen_embedding_forward_{{ mdesc }}_unweighted_nobag_kernel_small.h
+//
+//   General kernel (D > 32):
+//     {{ mdesc | capitalize }}EmbeddingNobagCodegenForwardUnweightedKernel
+//       → {{ mdesc }}_embedding_nobag_codegen_forward_unweighted_kernel (CUDA)
+//       Source: gen_embedding_forward_{{ mdesc }}_unweighted_nobag_kernel.h
+//
+// DESCRIPTION:
+//   Host function for no-bag (sequence) embedding forward pass without pooling.
+//   For each index in the input, copies the corresponding embedding row directly
+//   to the output tensor.
+//   Selects between the small-D-optimized kernel (D <= 32) and the general kernel
+//   (D > 32) at runtime based on the embedding dimension.
+{%- if not dense %}
+//   Supports cache-aware lookups via the LXU cache for UVM-managed tables.
+//   Dispatches the general kernel with use_lxu_cache=true/false based on whether
+//   lxu_cache_weights is populated.
+{%- endif %}
+//
+////////////////////////////////////////////////////////////////////////////////
 
 #include <cassert>
 #include <cstdlib>
@@ -158,12 +188,12 @@ namespace fbgemm_xpu {
                     const size_t grid_x = {%- if dense %}(total_B + kBlockDimY - 1) / kBlockDimY{%- else %}div_round_up(static_cast<size_t>(total_B), kBlockDimY){%- endif %};
 
                     queue.submit([&](sycl::handler& cgh) {
-                        cgh.parallel_for<{{ mdesc | capitalize }}EmbeddingNobagForwardUnweightedSmallKernel<emb_t, cache_t, output_t, index_t, kSmallThreadGroupSize>>(
+                        cgh.parallel_for<{{ mdesc | capitalize }}EmbeddingNobagCodegenForwardUnweightedSmallKernel<emb_t, cache_t, output_t, index_t, kSmallThreadGroupSize>>(
                             sycl::nd_range<2>(
                                 sycl::range<2>(grid_x * kBlockDimY, sg_size),
                                 sycl::range<2>(kBlockDimY, sg_size)
                             ),
-                            {{ mdesc | capitalize }}EmbeddingNobagForwardUnweightedSmallKernel<emb_t, cache_t, output_t, index_t, kSmallThreadGroupSize>(
+                            {{ mdesc | capitalize }}EmbeddingNobagCodegenForwardUnweightedSmallKernel<emb_t, cache_t, output_t, index_t, kSmallThreadGroupSize>(
                                 dev_weights.packed_accessor64<emb_t, 1, RestrictPtrTraits>(),
                                 {%- if not dense %}
                                 uvm_weights.packed_accessor64<emb_t, 1, RestrictPtrTraits>(),
@@ -200,12 +230,12 @@ namespace fbgemm_xpu {
 
                         {%- endif %}
                         queue.submit([&](sycl::handler& cgh) {
-                            cgh.parallel_for<{{ mdesc | capitalize }}EmbeddingNobagForwardUnweightedKernel<emb_t, cache_t, output_t, {%- if not dense %}use_cache_t, {%- endif %}index_t, kThreadGroupSize>>(
+                            cgh.parallel_for<{{ mdesc | capitalize }}EmbeddingNobagCodegenForwardUnweightedKernel<emb_t, cache_t, output_t, {%- if not dense %}use_cache_t, {%- endif %}index_t, kThreadGroupSize>>(
                                 sycl::nd_range<2>(
                                     sycl::range<2>(grid{%- if not dense %}_x{%- endif %} * local_y, local_x),
                                     sycl::range<2>(local_y, local_x)
                                 ),
-                                {{ mdesc | capitalize }}EmbeddingNobagForwardUnweightedKernel<emb_t, cache_t, output_t, {%- if not dense %}use_cache_t, {%- endif %}index_t, kThreadGroupSize>(
+                                {{ mdesc | capitalize }}EmbeddingNobagCodegenForwardUnweightedKernel<emb_t, cache_t, output_t, {%- if not dense %}use_cache_t, {%- endif %}index_t, kThreadGroupSize>(
                                     dev_weights.packed_accessor64<emb_t, 1, RestrictPtrTraits>(),
                                     {%- if not dense %}
                                     uvm_weights.packed_accessor64<emb_t, 1, RestrictPtrTraits>(),

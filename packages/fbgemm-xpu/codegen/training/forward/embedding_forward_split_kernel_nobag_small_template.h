@@ -1,14 +1,6 @@
 /*
- * Copyright 2026 Intel Corporation
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Portions of this file are derived from FBGEMM
- * Copyright (c) Meta Platforms, Inc. and affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+ * Copyright (c) 2026 Intel Corporation. All Rights Reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
@@ -24,20 +16,23 @@
 // SYCL PORT MAPPING TO FBGEMM CUDA SOURCE - FORWARD KERNELS
 ////////////////////////////////////////////////////////////////////////////////
 //
-// This file contains SYCL ports of FBGEMM {{ mdesc }} embedding forward kernels.
+// This file contains SYCL port of FBGEMM {{ mdesc }} embedding lookup forward 
+// unweighted small kernel.
 //
 // ORIGINAL CUDA SOURCE:
 //   Template: fbgemm_gpu/codegen/training/forward/embedding_forward_split_kernel_nobag_small_template.cu
+//   Generated Source: fbgemm_gpu/_skbuild/linux-x86_64-3.10/cmake-build/gen_embedding_forward_{{ mdesc }}_unweighted_nobag_kernel_small.cu
 //
 // KERNEL MAPPING:
-//   {{ mdesc | capitalize }}EmbeddingNobagForwardUnweightedSmallKernel
+//   {{ mdesc | capitalize }}EmbeddingNobagCodegenForwardUnweightedSmallKernel
 //     → {{ mdesc }}_embedding_nobag_codegen_forward_unweighted_small_kernel (CUDA)
+//
+// DESCRIPTION:
+//   Optimized forward kernel for small embedding dimensions (D <= 32).
+//   Uses sub-group shuffle operations for efficient small-dimension lookups.
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-/*
- * SYCL/XPU Implementation of {{ mdesc }} embedding forward kernel headers (Small D optimization)
- */
 
 #pragma once
 
@@ -77,28 +72,15 @@ using at::native::RestrictPtrTraits;
 
 namespace fbgemm_xpu {
 
-    ////////////////////////////////////////////////////////////////////////////////
-    // {{ mdesc | capitalize }}EmbeddingNobagForwardUnweightedSmallKernel - Device Kernel (Small D)
-    ////////////////////////////////////////////////////////////////////////////////
-    //
-    // CUDA SOURCE MAPPING:
-    //   CUDA Kernel: {{ mdesc }}_embedding_nobag_codegen_forward_unweighted_small_kernel
-    //   CUDA Template: fbgemm_gpu/codegen/training/forward/embedding_forward_split_kernel_nobag_small_template.cu
-    //
-    // DESCRIPTION:
-    //   Optimized forward kernel for small embedding dimensions (D <= 32).
-    //   Uses sub-group shuffle operations for efficient small-dimension lookups.
-    //
-    ////////////////////////////////////////////////////////////////////////////////
     template <
     typename emb_t,
     typename cache_t,
     typename output_t,
     typename index_t,
     size_t kThreadGroupSize>
-    class {{ mdesc | capitalize }}EmbeddingNobagForwardUnweightedSmallKernel {
+    class {{ mdesc | capitalize }}EmbeddingNobagCodegenForwardUnweightedSmallKernel {
         public:
-            {{ mdesc | capitalize }}EmbeddingNobagForwardUnweightedSmallKernel(
+            {{ mdesc | capitalize }}EmbeddingNobagCodegenForwardUnweightedSmallKernel(
                 const at::PackedTensorAccessor64<emb_t, 1, RestrictPtrTraits> dev_weights,
                 {%- if not dense %}
                 const at::PackedTensorAccessor64<emb_t, 1, RestrictPtrTraits> uvm_weights,
@@ -156,7 +138,7 @@ namespace fbgemm_xpu {
     typename output_t,
     typename index_t,
     size_t kThreadGroupSize>
-    inline void {{ mdesc | capitalize }}EmbeddingNobagForwardUnweightedSmallKernel<emb_t, cache_t, output_t, index_t, kThreadGroupSize>
+    inline void {{ mdesc | capitalize }}EmbeddingNobagCodegenForwardUnweightedSmallKernel<emb_t, cache_t, output_t, index_t, kThreadGroupSize>
     ::operator()(const sycl::nd_item<2>& item) const {
         auto b_t = item.get_group(0) * item.get_local_range(0) +
                 item.get_local_id(0);

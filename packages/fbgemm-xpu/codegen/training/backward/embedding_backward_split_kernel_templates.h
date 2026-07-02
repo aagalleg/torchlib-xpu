@@ -1,14 +1,6 @@
 /*
- * Copyright 2026 Intel Corporation
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Portions of this file are derived from FBGEMM
- * Copyright (c) Meta Platforms, Inc. and affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+ * Copyright (c) 2026 Intel Corporation. All Rights Reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
@@ -20,34 +12,42 @@
 // so we need to keep lint-ignore-every.
 #}
 
-{%- set optimizer = "none" if dense else "rowwise_adagrad" %}
-{%- set kernel_class = "SplitEmbeddingNobagBackwardDenseUnweightedKernelWarpPerRow1" if dense else "SplitEmbeddingNobagBackwardRowwiseAdagradUnweightedKernelWarpPerRow" %}
-{%- set cta_kernel_class = "SplitEmbeddingNobagBackwardDenseUnweightedKernelCtaPerRow" if dense else "SplitEmbeddingNobagBackwardRowwiseAdagradUnweightedKernelCTAPerRow" %}
-{%- set file_prefix = "dense_unweighted_nobag" if dense else "rowwise_adagrad_split_unweighted_nobag" %}
+{%- set optimizer = "Dense" if dense else "RowwiseAdagrad" %}
 
 ////////////////////////////////////////////////////////////////////////////////
-// SYCL PORT MAPPING TO FBGEMM CUDA SOURCE - BACKWARD WARP KERNEL HEADER
+// SYCL PORT MAPPING TO FBGEMM CUDA SOURCE - BACKWARD KERNEL TEMPLATES
 ////////////////////////////////////////////////////////////////////////////////
 //
-// This file contains the SYCL port of the FBGEMM {{ "dense" if dense else "split" }} embedding
-// backward warp-per-row kernel with {{ optimizer }} optimizer.
+// This file contains the SYCL ports of the FBGEMM {{ "dense" if dense else "split" }} embedding
+// backward kernels (no-bag / sequence, unweighted) with {{ "no" if dense else optimizer }} optimizer.
+// It provides both a warp-per-row and a CTA-per-row kernel, dispatched by the
+// host function based on segment length, plus the per-kernel helper functions.
 //
-// ORIGINAL CUDA SOURCE:
-//   File: fbgemm_gpu/_skbuild/linux-x86_64-3.10/cmake-build/gen_embedding_backward_{{ "dense_split_unweighted_nobag" if dense else "rowwise_adagrad_split_unweighted_nobag" }}_kernel_warp.cu
-//   Template: fbgemm_gpu/codegen/training/backward/embedding_backward_split_kernel_warp_template.cu
+// ORIGINAL CUDA SOURCES:
+//   Warp kernel template:  fbgemm_gpu/codegen/training/backward/embedding_backward_split_kernel_warp_template.cu
+//   Warp kernel generated: fbgemm_gpu/_skbuild/linux-x86_64-3.10/cmake-build/gen_embedding_backward_{{ "dense" if dense else "rowwise_adagrad" }}_split_unweighted_nobag_kernel_warp.cu
+//   CTA kernel template:   fbgemm_gpu/codegen/training/backward/embedding_backward_split_kernel_cta_template.cu
+//   CTA kernel generated:  fbgemm_gpu/_skbuild/linux-x86_64-3.10/cmake-build/gen_embedding_backward_{{ "dense" if dense else "rowwise_adagrad" }}_split_unweighted_nobag_kernel_cta.cu
 //
 // KERNEL MAPPING:
-//   {{ kernel_class }}
-//     → split_embedding_nobag_backward_{{ "dense_none" if dense else "codegen_rowwise_adagrad" }}_unweighted_kernel_warp_per_row{{ "_1" if dense else "_1" }} (CUDA)
+//   SplitEmbeddingNobagBackwardCodegen{{ optimizer }}UnweightedKernelWarpPerRow
+//     → split_embedding_nobag_backward_codegen_{{ "dense" if dense else "rowwise_adagrad" }}_unweighted_kernel_warp_per_row_1 (CUDA)
+//     Used for short segments (SL < max_segment_length_per_warp)
 //
-// NOTE: The "codegen" string is removed from SYCL implementation names
-//       for consistency with the refactored naming convention.
+//   SplitEmbeddingNobagBackwardCodegen{{ optimizer }}UnweightedKernelCtaPerRow
+//     → split_embedding_nobag_backward_codegen_{{ "dense" if dense else "rowwise_adagrad" }}_unweighted_kernel_cta_per_row_1 (CUDA)
+//     Used for long segments (SL >= max_segment_length_per_warp)
+//
+// HELPER FUNCTION MAPPING:
+{%- if dense %}
+//   store_grad_sum  (dense only)
+//     Stores the accumulated gradient for one embedding row into grad_dev_weights.
+{%- else %}
+//   split_rowwise_adagrad_table_update_kernel  (split only)
+//     Applies the rowwise Adagrad optimizer update for one embedding row.
+{%- endif %}
 //
 ////////////////////////////////////////////////////////////////////////////////
-
-/*
- * SYCL/XPU Implementation of {{ "dense" if dense else "split rowwise_adagrad" }} embedding backward warp-per-row kernel header
- */
 
 #pragma once
 
@@ -88,19 +88,28 @@ using float4 = sycl::float4;
 {%- endif %}
 
 namespace fbgemm_xpu {
-    
-    
-    ////////////////////////////////////////////////////////////////////////////////
+
 {%- if dense %}
+
+
     ////////////////////////////////////////////////////////////////////////////////
     // store_grad_sum - Gradient Storage Helper (Dense Only)
     ////////////////////////////////////////////////////////////////////////////////
     //
     // DESCRIPTION:
-    //   Helper function for storing accumulated gradients to the output tensor.
-    //   Handles both vec blocking and non-vec blocking cases.
+    //   Stores the accumulated per-row gradient vector (grad_sum) from a backward
+    //   kernel into the grad_dev_weights output tensor at position
+    //   [weights_offset + idx * D].
+    //
+    //   Two storage paths controlled by kUseVecBlocking:
+    //     kUseVecBlocking = true  — max_vecs is a runtime value; reads from
+    //                               smem_grad_sum (shared memory).
+    //     kUseVecBlocking = false — kFixedMaxVecsPerThread is a compile-time
+    //                               constant; reads directly from grad_sum
+    //                               registers, enabling loop unrolling.
     //
     ////////////////////////////////////////////////////////////////////////////////
+
     template<
         typename emb_t,
         typename cache_t,
@@ -155,16 +164,31 @@ namespace fbgemm_xpu {
     }
 
 {%- else %}
+
+
     ////////////////////////////////////////////////////////////////////////////////
-    // split_rowwise_adagrad_table_update_kernel - Optimizer Update Helper
+    // split_rowwise_adagrad_table_update_kernel - Rowwise Adagrad Update Helper
     ////////////////////////////////////////////////////////////////////////////////
     //
     // DESCRIPTION:
-    //   Helper function for applying rowwise Adagrad optimizer updates.
-    //   Loads weights, computes optimizer state, and stores updated weights.
-    //   Handles device/UVM placement and LXU cache.
+    //   Applies the rowwise Adagrad optimizer update for a single embedding row
+    //   after its gradient (grad_sum) has been accumulated by the backward kernel.
+    //
+    //   Steps performed per call:
+    //     1. Resolve weight pointer from PlacementType (DEVICE / UVM / MANAGED_CACHING).
+    //     2. Optionally read the cached row from lxu_cache_weights when present.
+    //     3. Compute the per-row gradient L2 norm (g_avg_square) using sub-group reduce.
+    //     4. Update momentum1 (running sum of squared gradients) on thread 0 and
+    //        broadcast multiplier and correction factors to the sub-group.
+    //     5. Apply weight update: w = correction * w - multiplier * grad.
+    //     6. Optionally clip the updated weight row to max_norm.
+    //
+    //   Supports L2 regularization (weight_decay_mode == 1) and
+    //   decoupled weight decay (weight_decay_mode == 2 / 5).
+    //   Two accumulation paths (kUseVecBlocking) mirror store_grad_sum above.
     //
     ////////////////////////////////////////////////////////////////////////////////
+
     template <
         typename emb_t,
         typename cache_t,
@@ -432,20 +456,31 @@ namespace fbgemm_xpu {
 
 {%- endif %}
 
-    // {{ kernel_class }} - Warp-Level Backward Kernel
+
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // SplitEmbeddingNobagBackwardCodegen{{ optimizer }}UnweightedKernelWarpPerRow - Warp-Per-Row Backward Kernel
     ////////////////////////////////////////////////////////////////////////////////
     //
     // CUDA SOURCE MAPPING:
-    //   CUDA Kernel: split_embedding_nobag_backward_{{ "dense_none" if dense else "codegen_rowwise_adagrad" }}_unweighted_kernel_warp_per_row_1
-    //   CUDA File: fbgemm_gpu/_skbuild/linux-x86_64-3.10/cmake-build/gen_embedding_backward_{{ "dense_split_unweighted_nobag" if dense else "rowwise_adagrad_split_unweighted_nobag" }}_kernel_warp.cu
+    //   CUDA Kernel:   split_embedding_nobag_backward_codegen_{{ "dense" if dense else "rowwise_adagrad" }}_unweighted_kernel_warp_per_row_1
+    //   CUDA File:     fbgemm_gpu/_skbuild/linux-x86_64-3.10/cmake-build/gen_embedding_backward_{{ "dense" if dense else "rowwise_adagrad" }}_split_unweighted_nobag_kernel_warp.cu
     //   CUDA Template: fbgemm_gpu/codegen/training/backward/embedding_backward_split_kernel_warp_template.cu
     //
     // DESCRIPTION:
-    //   Warp-level backward kernel for short segments (nobag).
-    //   One warp processes one embedding row gradient update.
-    //   {{ "No optimizer - computes gradients only and stores to grad_dev_weights." if dense else "Uses rowwise_adagrad optimizer for weight updates." }}
+    //   Backward kernel for short segments (SL < max_segment_length_per_warp).
+    //   One sub-group (warp) handles the full gradient accumulation and weight
+    //   update for a single embedding row. Uses grid-striding over run IDs so
+    //   each work-item processes multiple rows when the grid is smaller than the
+    //   number of unique indices.
+{%- if dense %}
+    //   Dense path: accumulates gradients and stores to grad_dev_weights (no optimizer).
+{%- else %}
+    //   Split path: accumulates gradients then calls split_rowwise_adagrad_table_update_kernel.
+{%- endif %}
     //
     ////////////////////////////////////////////////////////////////////////////////
+
     template <
         typename emb_t,
         typename grad_t,
@@ -454,9 +489,9 @@ namespace fbgemm_xpu {
         int32_t kFixedMaxVecsPerThread,
         int32_t kThreadGroupSize,
         bool kUseVecBlocking>
-    class {{ kernel_class }} {
+    class SplitEmbeddingNobagBackwardCodegen{{ optimizer }}UnweightedKernelWarpPerRow {
     public:
-        {{ kernel_class }}(
+        SplitEmbeddingNobagBackwardCodegen{{ optimizer }}UnweightedKernelWarpPerRow(
             const at::PackedTensorAccessor64<grad_t, 2, RestrictPtrTraits> grad_output,
             at::PackedTensorAccessor64<emb_t, 1, RestrictPtrTraits> dev_weights,
 {%- if not dense %}
@@ -618,6 +653,7 @@ namespace fbgemm_xpu {
                 kUseVecBlocking ? max_vecs_per_thread_ : kFixedMaxVecsPerThread;
 
 {%- if dense %}
+
             // ========== DENSE: Store gradient to grad_dev_weights ==========
             const int64_t weights_offset = weights_offsets_[t_0];
             store_grad_sum<
@@ -636,7 +672,9 @@ namespace fbgemm_xpu {
                     idx,
                     max_vecs
             );
+
 {%- else %}
+
             // ========== SPLIT: Apply optimizer (Rowwise Adagrad) ==========
             split_rowwise_adagrad_table_update_kernel<
                 emb_t,
@@ -674,6 +712,7 @@ namespace fbgemm_xpu {
                     weight_decay_mode_,
                     max_norm_
             ); // if not dense and optimizer != "none"
+
 {%- endif %}
 
         } // for each run
@@ -724,21 +763,32 @@ namespace fbgemm_xpu {
 {%- endif %}
     };
 
+
     ////////////////////////////////////////////////////////////////////////////////
-    // {{ cta_kernel_class }} - Block-Level Backward Kernel
+    // SplitEmbeddingNobagBackwardCodegen{{ optimizer }}UnweightedKernelCtaPerRow - CTA-Per-Row Backward Kernel
     ////////////////////////////////////////////////////////////////////////////////
     //
     // CUDA SOURCE MAPPING:
-    //   CUDA Kernel: split_embedding_nobag_backward_{{ "dense_none" if dense else "codegen_rowwise_adagrad" }}_unweighted_kernel_cta_per_row_1
-    //   CUDA File: fbgemm_gpu/_skbuild/linux-x86_64-3.10/cmake-build/gen_embedding_backward_{{ "dense_split_unweighted_nobag" if dense else "rowwise_adagrad_split_unweighted_nobag" }}_kernel_cta.cu
+    //   CUDA Kernel:   split_embedding_nobag_backward_codegen_{{ "dense" if dense else "codegen_rowwise_adagrad" }}_unweighted_kernel_cta_per_row_1
+    //   CUDA File:     fbgemm_gpu/_skbuild/linux-x86_64-3.10/cmake-build/gen_embedding_backward_{{ "dense" if dense else "rowwise_adagrad" }}_split_unweighted_nobag_kernel_cta.cu
     //   CUDA Template: fbgemm_gpu/codegen/training/backward/embedding_backward_split_kernel_cta_template.cu
     //
     // DESCRIPTION:
-    //   Block-level backward kernel for long segments (nobag).
-    //   One CTA processes one embedding row gradient update.
-    //   {{ "No optimizer - computes gradients only and stores to grad_dev_weights." if dense else "Uses rowwise_adagrad optimizer for weight updates." }}
+    //   Backward kernel for long segments (SL >= max_segment_length_per_warp).
+    //   One CTA (thread block) handles the gradient accumulation and weight update
+    //   for a single embedding row. Multiple warps within the CTA each process a
+    //   slice of the segment and reduce into shared memory before the final update.
+    //   For very long segments that exceed max_segment_length_per_cta, multiple
+    //   CTAs cooperate via temp_grad_accum and grad_accum_counter, with the last
+    //   CTA to finish performing the optimizer step.
+{%- if dense %}
+    //   Dense path: accumulates gradients and stores to grad_dev_weights (no optimizer).
+{%- else %}
+    //   Split path: accumulates gradients then calls split_rowwise_adagrad_table_update_kernel.
+{%- endif %}
     //
     ////////////////////////////////////////////////////////////////////////////////
+
     template <
         typename emb_t,
         typename grad_t,
@@ -747,9 +797,9 @@ namespace fbgemm_xpu {
         int32_t kFixedMaxVecsPerThread,
         int32_t kThreadGroupSize,
         bool kUseVecBlocking>
-    class {{ cta_kernel_class }} {
+    class SplitEmbeddingNobagBackwardCodegen{{ optimizer }}UnweightedKernelCtaPerRow {
     public:
-        {{ cta_kernel_class }}(
+        SplitEmbeddingNobagBackwardCodegen{{ optimizer }}UnweightedKernelCtaPerRow(
             const at::PackedTensorAccessor64<grad_t, 2, RestrictPtrTraits> grad_output,
             at::PackedTensorAccessor64<emb_t, 1, RestrictPtrTraits> dev_weights,
 {%- if not dense %}
@@ -1076,6 +1126,7 @@ namespace fbgemm_xpu {
             }
 
 {%- if dense %}
+
             // Write deduplicated gradient to grad_dev_weights
             const int64_t weights_offset = weights_offsets_[t_0];
             store_grad_sum<
@@ -1094,7 +1145,9 @@ namespace fbgemm_xpu {
                     idx,
                     max_vecs
             );
+
 {%- else %}
+
             // Apply rowwise adagrad optimizer update
             split_rowwise_adagrad_table_update_kernel<
                 emb_t,
@@ -1132,6 +1185,7 @@ namespace fbgemm_xpu {
                     weight_decay_mode_,
                     max_norm_
             );
+
 {%- endif %}
         } // for each run
         }
