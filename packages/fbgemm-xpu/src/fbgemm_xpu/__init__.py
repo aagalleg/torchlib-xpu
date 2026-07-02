@@ -1,20 +1,24 @@
-# Copyright 2026 Intel Corporation
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Portions of this file are derived from FBGEMM
-# Copyright (c) Meta Platforms, Inc. and affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+# Copyright (c) 2026 Intel Corporation. All Rights Reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 
-# Main package initialization for the fbgemm module
-# This imports the C extension and Python operator wrappers
-import torch
-from pathlib import Path
+# Import the compiled C extension (_C) which contains the registered operators.
+# If native dependencies (for example libtorch.so) are unavailable, keep import
+# working so metadata like __version__ remains accessible.
+try:
+    from . import _C as _C
+except ImportError:
+    _C = None
 
-# Import the compiled C extension (_C) which contains the registered operators
-# Import ops module which provides Python wrapper functions with autograd support
-from . import _C, ops
+from . import ops as ops
+
+__all__ = ["_C", "ops", "__version__"]
+
+try:
+    from ._version import __version__
+except ModuleNotFoundError:
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+        __version__ = version("fbgemm-xpu")
+    except (ImportError, PackageNotFoundError):
+        __version__ = "unknown"

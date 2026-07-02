@@ -1,14 +1,6 @@
 /*
- * Copyright 2026 Intel Corporation
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Portions of this file are derived from FBGEMM
- * Copyright (c) Meta Platforms, Inc. and affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+ * Copyright (c) 2026 Intel Corporation. All Rights Reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
@@ -48,14 +40,14 @@ extern "C" {
 }
 
 /**
- * Central operator registry for ALL custom operators under the "fbgemm" namespace.
+ * Central operator registry for operators under the "fbgemm" namespace.
  *
  * Uses TORCH_LIBRARY_FRAGMENT so this can coexist with upstream fbgemm_gpu
  * which may already own the "fbgemm" namespace via TORCH_LIBRARY(fbgemm, m).
  *
  * Operator schemas are declared here; device-specific implementations are
  * registered separately via TORCH_LIBRARY_IMPL(fbgemm, <KEY>, m) in the
- * respective .cpp / .sycl / .cu files.
+ * respective .cpp / .cu files.
  */
 TORCH_LIBRARY_FRAGMENT(fbgemm, m) {
 
