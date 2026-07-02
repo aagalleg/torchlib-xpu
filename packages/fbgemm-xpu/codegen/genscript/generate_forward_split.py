@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
+# Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+# Copyright (c) 2026 Intel Corporation. All Rights Reserved.
+# SPDX-License-Identifier: BSD-3-Clause
 
 # pyre-strict
 # flake8: noqa F401
@@ -71,12 +69,12 @@ class ForwardSplitGenerator:
     @staticmethod
     def generate_pt2_wrappers() -> None:
         pt2_impl_template = CodeTemplate.load(
-            "training/pt2/embedding_forward_nobag_unweighted_pt2_wrapper_template.sycl",
+            "training/pt2/embedding_forward_nobag_unweighted_pt2_wrapper_template.cpp",
         )
             
         # Generate implementation file
         pt2_impl_template.write(
-            f"sycl_kernels/gen_embedding_forward_split_unweighted_nobag_pt2_wrapper.sycl",
+            f"sycl_kernels/gen_embedding_forward_split_unweighted_nobag_pt2_wrapper.cpp",
             is_forward=True,
         )
 
@@ -85,7 +83,7 @@ class ForwardSplitGenerator:
     def generate_small_kernels() -> None:
         # Generate the SYCL small kernel headers (for nobag only).
         # The operator() implementation is now inlined in the header template,
-        # so no separate .sycl file is generated.
+        # so no separate .cpp file is generated.
         sycl_header_template = CodeTemplate.load(
             "training/forward/embedding_forward_split_kernel_nobag_small_template.h"
         )
@@ -125,34 +123,15 @@ class ForwardSplitGenerator:
 
         # Load the unified templates for general D kernels
         sycl_template = CodeTemplate.load(
-            "training/forward/embedding_forward_nobag_unweighted_host_template.sycl"
+            "training/forward/embedding_forward_nobag_unweighted_host_template.cpp"
         )
 
         for dense in [True, False]:
             ddesc = f"{ 'dense' if dense else 'split' }"
             sycl_template.write(
-                f"sycl_kernels/gen_embedding_forward_{ ddesc }_unweighted_nobag_host.sycl",
+                f"sycl_kernels/gen_embedding_forward_{ ddesc }_unweighted_nobag_host.cpp",
                 dense=dense,
             )
-        # # Generate the CUDA host code
-        # ForwardSplitGenerator.render_forward_templates(
-        #     "training/forward/embedding_forward_split_template.cu",
-        #     "gen_embedding_forward_{}_codegen_cuda.cu",
-        #     dense_options=[True, False],
-        #     nobag_options=[False],  # nobag is not used
-        #     vbe_options=[True, False],
-        #     ssd_options=[True, False],
-        # )
-        # # Generate the CUDA host code for global weight decay
-        # ForwardSplitGenerator.render_forward_templates(
-        #     "training/forward/embedding_forward_split_template.cu",
-        #     "gen_embedding_forward_{}_gwd_codegen_cuda.cu",
-        #     dense_options=[False],
-        #     nobag_options=[False],  # nobag is not used
-        #     vbe_options=[True, False],
-        #     is_gwd=True,
-        #     ssd_options=[False],
-        # )
 
     @staticmethod
     def generate() -> None:
