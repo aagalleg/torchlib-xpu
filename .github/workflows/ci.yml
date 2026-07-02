@@ -481,6 +481,7 @@ jobs:
         pwd
         ls -l 
         ls -l ./_wheels/
+        pwd
         find ./_wheels/ -name "*.whl"
         pip install \
           "$(ls ./_wheels/${{ env.WHEELS }}-${{ env.PR_OR_SHA }}-${{ env.UNIQUE_ID }}/fbgemm_xpu*.whl)[test]" \
