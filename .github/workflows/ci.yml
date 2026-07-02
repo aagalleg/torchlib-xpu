@@ -449,8 +449,10 @@ jobs:
       with:
         name: ${{ env.WHEELS }}-${{ env.PR_OR_SHA }}-${{ env.UNIQUE_ID }}
         path: _wheels/
-    # - name: 'Checkout'
-    #   uses: actions/checkout@v7
+    - name: 'Checkout'
+      uses: actions/checkout@v7
+      with:
+        path: torchlib-xpu
     - name: 'Setup Conda'
       uses: conda-incubator/setup-miniconda@v4
       with:
