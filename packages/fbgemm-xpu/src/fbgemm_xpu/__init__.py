@@ -11,14 +11,26 @@ import fbgemm_gpu  # noqa: F401, E402
 import torch  # noqa: F401
 
 # Import the compiled C extension (_C) which contains the registered operators.
-# If native dependencies are unavailable, keep import working so metadata like
-# __version__ remains accessible.
+# If native dependencies (for example libtorch.so) are unavailable, keep import
+# working so metadata like __version__ remains accessible.
 try:
     from . import _C as _C
 except ImportError:
     _C = None
 
-__all__ = ["_C", "__version__"]
+# Load the training / codegen extension that registers XPU and AutogradXPU
+# implementations for the embedding lookup operators
+# (dense_embedding_codegen_lookup_function, split_embedding_codegen_lookup_*).
+# It must be imported after _C so the operator schemas declared there are
+# already visible when the TORCH_LIBRARY_IMPL static initialisers run.
+try:
+    from . import _C_training as _C_training
+except ImportError:
+    _C_training = None
+
+from . import ops as ops
+
+__all__ = ["_C", "_C_training", "ops", "__version__"]
 
 try:
     from ._version import __version__
