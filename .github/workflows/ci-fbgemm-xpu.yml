@@ -1,8 +1,7 @@
 name: ci-fbgemm-xpu
 
 # This workflow builds manylinux fbgemm-xpu wheels. Kernels are SYCL-based 
-# and compiled with the Intel oneAPI compiler (icpx), targeting Intel XPU 
-# architectures.
+# and compiled with the Intel oneAPI compiler (icpx).
 #
 # We use the pytorch manylinux builder image
 # (pytorch/manylinux2_28-builder:xpu-v2.12.0-rc1) since it already ships
