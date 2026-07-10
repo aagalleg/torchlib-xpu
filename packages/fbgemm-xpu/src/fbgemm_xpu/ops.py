@@ -5,29 +5,13 @@
 # Python wrapper functions for all custom operators under the fbgemm namespace
 # This module provides user-friendly interfaces to the C++ operators
 
-from typing import Optional, Tuple
-
 import torch
 from torch import Tensor
 
 __all__ = [
     "invert_permute",
-	"permute_1D_sparse_data",
 ]
 
 def invert_permute(permute: Tensor) -> Tensor:
     """Computes the inverse of a permutation tensor."""
     return torch.ops.fbgemm.invert_permute.default(permute)
-
-
-def permute_1D_sparse_data(
-    permute: Tensor,
-    lengths: Tensor,
-    indices: Tensor,
-    weights: Optional[Tensor] = None,
-    permuted_lengths_sum: Optional[int] = None,
-) -> Tuple[Tensor, Tensor, Optional[Tensor]]:
-    """Permutes sparse data in jagged/1D format according to permutation indices."""
-    return torch.ops.fbgemm.permute_1D_sparse_data.default(
-        permute, lengths, indices, weights, permuted_lengths_sum
-    )
