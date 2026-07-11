@@ -51,6 +51,8 @@ set(host_sources
     ${CMAKE_CURRENT_SOURCE_DIR}/sycl_kernels/jagged_index_select_2d.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sycl_kernels/permute_1d_sparse_data.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sycl_kernels/permute_2d_sparse_data.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sycl_kernels/reorder_batched_ad.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/reorder_batched_ad_op.cpp
 )
 
 set(all_sources ${host_sources})
