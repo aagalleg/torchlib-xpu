@@ -335,4 +335,28 @@ TORCH_LIBRARY_FRAGMENT(fbgemm, m) {
             "    Tensor bucket_mapping"
             ") -> Tensor");
     }
+
+    if (!schemaExists("fbgemm::reorder_batched_ad_lengths")) {
+        m.def(
+            "reorder_batched_ad_lengths("
+            "    Tensor cat_ad_lengths, "
+            "    Tensor batch_offsets, "
+            "    int num_ads_in_batch, "
+            "    bool broadcast_lengths=False, "
+            "    int max_batch_size=0"
+            ") -> Tensor");
+    }
+
+    if (!schemaExists("fbgemm::reorder_batched_ad_indices")) {
+        m.def(
+            "reorder_batched_ad_indices("
+            "    Tensor cat_ad_offsets, "
+            "    Tensor cat_ad_indices, "
+            "    Tensor reordered_cat_ad_offsets, "
+            "    Tensor batch_offsets, "
+            "    int num_ads_in_batch, "
+            "    bool broadcast_indices=False, "
+            "    int num_indices_after_broadcast=-1"
+            ") -> Tensor");
+    }
 }

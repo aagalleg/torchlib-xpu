@@ -50,6 +50,8 @@ set(host_sources
     ${CMAKE_CURRENT_SOURCE_DIR}/sycl_kernels/permute_2d_sparse_data.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/permute_2d_sparse_data_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sycl_kernels/block_bucketize_sparse_features.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sycl_kernels/reorder_batched_ad.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/reorder_batched_adOp.cpp
 )
 
 set(all_sources ${host_sources})
