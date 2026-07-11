@@ -44,6 +44,7 @@ set(SYCL_DEVICE_LIST -Xs "-device ${TORCH_XPU_ARCH_LIST} -options -cl-poison-uns
 set(host_sources
     ${CMAKE_CURRENT_SOURCE_DIR}/ops_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sycl_kernels/invert_permute_kernel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sycl_kernels/jagged_index_select_2d.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sycl_kernels/permute_1d_sparse_data.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/asynchronous_complete_cumsum.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fbgemm_utils/utils.cpp

@@ -260,6 +260,17 @@ TORCH_LIBRARY_FRAGMENT(fbgemm, m) {
         m.def("invert_permute(Tensor permute) -> Tensor");
     }
 
+    if (!schemaExists("fbgemm::jagged_index_select_2d_forward")) {
+        m.def(
+            "jagged_index_select_2d_forward("
+            "    Tensor values, "
+            "    Tensor indices, "
+            "    Tensor input_offsets, "
+            "    Tensor output_offsets, "
+            "    int num_dense_output_rows"
+            ") -> Tensor");
+    }
+
     if (!schemaExists("fbgemm::permute_1D_sparse_data")) {
         m.def(
             "permute_1D_sparse_data("
