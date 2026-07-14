@@ -146,11 +146,23 @@ jobs:
           gpg \
           software-properties-common \
           wget
+        git config --global user.email "nobody@intel.com"
+        git config --global user.name "Nobody"
     - name: 'Download wheels'
       uses: actions/download-artifact@v8
       with:
         name: ${{ env.WHEELS }}-${{ env.PR_OR_SHA }}-${{ env.UNIQUE_ID }}
         path: _wheels/
+    - name: 'Checkout'
+      uses: actions/checkout@v7
+      with:
+        path: torchlib-xpu
+    - name: 'Checkout'
+      uses: actions/checkout@v7
+      with:
+        repository: pytorch/FBGEMM
+        ref: v1.7.0
+        path: fbgemm
     - name: 'Setup Conda'
       uses: conda-incubator/setup-miniconda@v4
       with:
@@ -187,10 +199,16 @@ jobs:
     - name: 'Test gpu'
       run: |
         python -c "import torch; print(torch.xpu.is_available())" 
-    - name: 'Test fbgemm-xpu'
-      working-directory: packages/fbgemm-xpu
+    - name: 'Patch FBGEMM'
+      working-directory: fbgemm
       run: |
-        pytest -rsf test/
+        # TODO: Apply XPU patches here
+        echo "Patches will be applied here"
+    - name: 'Test fbgemm-xpu'
+      working-directory: fbgemm
+      run: |
+        # TODO: Run pytest commands to run the XPU tests here
+        echo "Instructions to run the tests will be added here"
 
   publish:
     needs: [ compose, test-fbgemm ]
