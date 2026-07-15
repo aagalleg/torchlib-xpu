@@ -5,12 +5,14 @@ Subject: [PATCH] Add XPU support to FBGEMM sparse ops tests
 
 Add XPU device support to misc_ops_test.py and permute_sparse_features_test.py.
 Includes support for permute_1D_sparse_data and permute_2D_sparse_data operators.
+Also adds XPU support to test_asynchronous_complete_cumsum_2d in cumsum_test.py.
 
 Signed-off-by: Alberto Gallegos <alberto.gallegos.muro@intel.com>
 ---
+ fbgemm_gpu/test/sparse/cumsum_test.py              |  16 +++++--
  fbgemm_gpu/test/sparse/misc_ops_test.py            |  18 ++++++--
  .../test/sparse/permute_sparse_features_test.py    |  48 ++++++++++----------
- 2 files changed, 39 insertions(+), 27 deletions(-)
+ 3 files changed, 51 insertions(+), 31 deletions(-)
 
 diff --git a/fbgemm_gpu/test/sparse/misc_ops_test.py b/fbgemm_gpu/test/sparse/misc_ops_test.py
 index f3371677e..73a1641e8 100644
@@ -186,5 +188,46 @@ index 2b8302739..296f7e122 100644
                  ),
              )
          )
+diff --git a/fbgemm_gpu/test/sparse/cumsum_test.py b/fbgemm_gpu/test/sparse/cumsum_test.py
+index 3694905fb..85c590c59 100644
+--- a/fbgemm_gpu/test/sparse/cumsum_test.py
++++ b/fbgemm_gpu/test/sparse/cumsum_test.py
+@@ -24,6 +24,11 @@ else:
+     import fbgemm_gpu.sparse_ops  # noqa: F401, E402
+     from fbgemm_gpu.test.test_utils import cpu_and_maybe_gpu
+ 
++# Registers the XPU (Intel GPU) FBGEMM operator implementations.
++import fbgemm_xpu  # noqa: F401, E402
++
++xpu_available: bool = torch.xpu.is_available()
++
+ 
+ class CumSumTest(unittest.TestCase):
+     @given(
+@@ -98,7 +103,10 @@ class CumSumTest(unittest.TestCase):
+                 (torch.float32, np.float32),
+             ]
+         ),
+-        device=cpu_and_maybe_gpu(),
++        device=st.sampled_from(
++            [torch.device("cpu")]
++            + ([torch.device("xpu")] if xpu_available else [])
++        ),
+     )
+     @settings(verbosity=Verbosity.verbose, max_examples=20, deadline=None)
+     def test_asynchronous_complete_cumsum_2d(
+@@ -110,10 +118,8 @@ class CumSumTest(unittest.TestCase):
+     ) -> None:
+         pt_index_dtype, np_index_dtype = index_types
+ 
+-        # The CPU variants of asynchronous_*_cumsum support floats, since some
+-        # downstream tests appear to be relying on this behavior.  As such, the
+-        # test is disabled for GPU + float test cases.
+-        if device == torch.device("cuda") and pt_index_dtype is torch.float32:
++        # The GPU variants of asynchronous_*_cumsum do not support floats.
++        if device.type in ("cuda", "xpu") and pt_index_dtype is torch.float32:
+             return
+ 
+         # pyre-ignore-errors[16]
 -- 
 2.43.0
