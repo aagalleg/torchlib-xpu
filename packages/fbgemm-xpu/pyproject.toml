@@ -14,6 +14,9 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
 authors = [
+    { name = "Intel Corp." }
+]
+maintainers = [
     { name = "Alberto Gallegos Muro", email = "alberto.gallegos.muro@intel.com" },
     { name = "Felipe Leza Alvarez", email = "felipe.leza.alvarez@intel.com" },
     { name = "Manuel Santana Castolo", email = "manuel.santana.castolo@intel.com" },
