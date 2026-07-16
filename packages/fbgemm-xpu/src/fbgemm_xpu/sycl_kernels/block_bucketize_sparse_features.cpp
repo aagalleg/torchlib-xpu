@@ -26,16 +26,7 @@
  * XPU host function parameter order matches ops_registry.cpp schema
  */
 
-#include <cstdint>
-#include <optional>
-#include <vector>
-
-#include <sycl/sycl.hpp>
-#include <c10/xpu/XPUStream.h>
-
-#include <ATen/Operators.h>
-#include <torch/all.h>
-#include <torch/library.h>
+#include "block_bucketize_sparse_features.h"
 
 // FBGEMM dispatch macros (not available in all environments; define inline)
 #ifndef FBGEMM_DISPATCH_FLOAT_AND_DOUBLE_CASE
@@ -66,128 +57,85 @@ static at::Tensor local_complete_cumsum_xpu(const at::Tensor& t_in) {
     return out;
 }
 
-// Sentinel type used in place of std::nullptr_t when has_weight=false.
-// std::nullptr_t is not a valid SYCL kernel name component (SYCL rule:
-// kernel names must not use types from reserved namespaces like std::).
-struct NoWeightT {};
 // Kernel 1 – count new_lengths
 // One work-item per b_t; serial inner loop over its indices.
 // No atomics needed: each work-item is the sole writer to column b_t.
 // ============================================================================
 
 template <typename offset_t, typename index_t>
-class BlockBucketizeCountKernel {
-public:
-    BlockBucketizeCountKernel(
-        int64_t lengths_size,
-        int64_t B,
-        int64_t my_size,
-        const offset_t* offsets_data,
-        const index_t* indices_data,
-        const index_t* block_sizes_data,
-        const offset_t* length_to_feature_idx, // nullptr if not variable-batch
-        const index_t* block_bucketize_pos_concat, // nullptr if uniform
-        const index_t* block_bucketize_pos_offsets, // nullptr if uniform
-        const index_t* total_num_blocks,            // nullptr if not set
-        offset_t* new_lengths_data,
-        index_t* indices_to_lb)                     // nullptr if uniform
-      : lengths_size_(lengths_size),
-        B_(B),
-        my_size_(my_size),
-        offsets_data_(offsets_data),
-        indices_data_(indices_data),
-        block_sizes_data_(block_sizes_data),
-        length_to_feature_idx_(length_to_feature_idx),
-        block_bucketize_pos_concat_(block_bucketize_pos_concat),
-        block_bucketize_pos_offsets_(block_bucketize_pos_offsets),
-        total_num_blocks_(total_num_blocks),
-        new_lengths_data_(new_lengths_data),
-        indices_to_lb_(indices_to_lb) {}
+void BlockBucketizeCountKernel<offset_t, index_t>::operator()(
+        const sycl::nd_item<1>& item) const {
+    using uindex_t = std::make_unsigned_t<index_t>;
+    const int64_t global_id = item.get_global_id(0);
+    const int64_t global_range = item.get_global_range(0);
 
-    void operator()(const sycl::nd_item<1>& item) const {
-        using uindex_t = std::make_unsigned_t<index_t>;
-        const int64_t global_id = item.get_global_id(0);
-        const int64_t global_range = item.get_global_range(0);
+    for (int64_t b_t = global_id; b_t < lengths_size_; b_t += global_range) {
+        const offset_t t = length_to_feature_idx_
+            ? static_cast<offset_t>(length_to_feature_idx_[b_t])
+            : static_cast<offset_t>(b_t / B_);
+        const index_t blk_size = block_sizes_data_[t];
 
-        for (int64_t b_t = global_id; b_t < lengths_size_; b_t += global_range) {
-            const offset_t t = length_to_feature_idx_
-                ? static_cast<offset_t>(length_to_feature_idx_[b_t])
-                : static_cast<offset_t>(b_t / B_);
-            const index_t blk_size = block_sizes_data_[t];
+        const index_t local_num_blks = total_num_blocks_
+            ? (total_num_blocks_[t] / static_cast<index_t>(my_size_))
+            : 1;
+        const index_t global_num_blks = total_num_blocks_
+            ? total_num_blocks_[t]
+            : static_cast<index_t>(my_size_);
+        const index_t global_idx_size = blk_size * global_num_blks;
+        const index_t local_idx_size  = blk_size * local_num_blks;
 
-            const index_t local_num_blks = total_num_blocks_
-                ? (total_num_blocks_[t] / static_cast<index_t>(my_size_))
-                : 1;
-            const index_t global_num_blks = total_num_blocks_
-                ? total_num_blocks_[t]
-                : static_cast<index_t>(my_size_);
-            const index_t global_idx_size = blk_size * global_num_blks;
-            const index_t local_idx_size  = blk_size * local_num_blks;
+        const offset_t rowstart = (b_t == 0) ? 0 : offsets_data_[b_t - 1];
+        const offset_t rowend   = offsets_data_[b_t];
+        const bool use_bbp = (block_bucketize_pos_concat_ != nullptr);
 
-            const offset_t rowstart = (b_t == 0) ? 0 : offsets_data_[b_t - 1];
-            const offset_t rowend   = offsets_data_[b_t];
-            const bool use_bbp = (block_bucketize_pos_concat_ != nullptr);
+        if (!use_bbp) {
+            // (a) Uniform buckets
+            for (offset_t i = rowstart; i < rowend; ++i) {
+                uindex_t idx = static_cast<uindex_t>(indices_data_[i]);
+                uindex_t p = (idx < static_cast<uindex_t>(global_idx_size))
+                    ? idx / static_cast<uindex_t>(local_idx_size)
+                    : (idx % static_cast<uindex_t>(global_num_blks))
+                          / static_cast<uindex_t>(local_num_blks);
+                new_lengths_data_[p * lengths_size_ + b_t]++;
+            }
+        } else {
+            // (b) Variable buckets – binary search
+            const index_t first_off = block_bucketize_pos_offsets_[t];
+            const index_t last_off  = block_bucketize_pos_offsets_[t + 1];
+            // blk_scalar: last boundary / global_num_blks (used when blk_size==0)
+            // Use variable-stride index: last_off - 1 is the final boundary entry for feature t
+            const uindex_t blk_scalar =
+                (last_off > first_off)
+                ? (static_cast<uindex_t>(block_bucketize_pos_concat_[last_off - 1])
+                   / static_cast<uindex_t>(global_num_blks))
+                : static_cast<uindex_t>(1);
 
-            if (!use_bbp) {
-                // (a) Uniform buckets
-                for (offset_t i = rowstart; i < rowend; ++i) {
-                    uindex_t idx = static_cast<uindex_t>(indices_data_[i]);
-                    uindex_t p = (idx < static_cast<uindex_t>(global_idx_size))
-                        ? idx / static_cast<uindex_t>(local_idx_size)
-                        : (idx % static_cast<uindex_t>(global_num_blks))
-                              / static_cast<uindex_t>(local_num_blks);
-                    new_lengths_data_[p * lengths_size_ + b_t]++;
+            for (offset_t i = rowstart; i < rowend; ++i) {
+                uindex_t idx = static_cast<uindex_t>(indices_data_[i]);
+                if (blk_size == 0) {
+                    idx = (idx % static_cast<uindex_t>(global_num_blks)) * blk_scalar;
                 }
-            } else {
-                // (b) Variable buckets – binary search
-                const index_t first_off = block_bucketize_pos_offsets_[t];
-                const index_t last_off  = block_bucketize_pos_offsets_[t + 1];
-                // blk_scalar: last boundary / global_num_blks (used when blk_size==0)
-                // Use variable-stride index: last_off - 1 is the final boundary entry for feature t
-                const uindex_t blk_scalar =
-                    (last_off > first_off)
-                    ? (static_cast<uindex_t>(block_bucketize_pos_concat_[last_off - 1])
-                       / static_cast<uindex_t>(global_num_blks))
-                    : static_cast<uindex_t>(1);
-
-                for (offset_t i = rowstart; i < rowend; ++i) {
-                    uindex_t idx = static_cast<uindex_t>(indices_data_[i]);
-                    if (blk_size == 0) {
-                        idx = (idx % static_cast<uindex_t>(global_num_blks)) * blk_scalar;
+                // Binary search for lower bound
+                index_t lo = first_off, hi = last_off;
+                while (lo < hi) {
+                    index_t mid = lo + (hi - lo) / 2;
+                    if (static_cast<uindex_t>(block_bucketize_pos_concat_[mid]) <= idx) {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
                     }
-                    // Binary search for lower bound
-                    index_t lo = first_off, hi = last_off;
-                    while (lo < hi) {
-                        index_t mid = lo + (hi - lo) / 2;
-                        if (static_cast<uindex_t>(block_bucketize_pos_concat_[mid]) <= idx) {
-                            lo = mid + 1;
-                        } else {
-                            hi = mid;
-                        }
-                    }
-                    index_t lb = lo - first_off - 1;
-                    if (indices_to_lb_) indices_to_lb_[i] = lb;
-                    uindex_t p = (lb < static_cast<index_t>(my_size_))
-                        ? static_cast<uindex_t>(lb)
-                        : (idx % static_cast<uindex_t>(my_size_));
-                    new_lengths_data_[p * lengths_size_ + b_t]++;
                 }
+                index_t lb = lo - first_off - 1;
+                if (indices_to_lb_) indices_to_lb_[i] = lb;
+                uindex_t p = (lb < static_cast<index_t>(my_size_))
+                    ? static_cast<uindex_t>(lb)
+                    : (idx % static_cast<uindex_t>(my_size_));
+                new_lengths_data_[p * lengths_size_ + b_t]++;
             }
         }
     }
+}
 
-private:
-    int64_t lengths_size_, B_, my_size_;
-    const offset_t* offsets_data_;
-    const index_t* indices_data_;
-    const index_t* block_sizes_data_;
-    const offset_t* length_to_feature_idx_;
-    const index_t* block_bucketize_pos_concat_;
-    const index_t* block_bucketize_pos_offsets_;
-    const index_t* total_num_blocks_;
-    offset_t* new_lengths_data_;
-    index_t* indices_to_lb_;
-};
 
 // ============================================================================
 // Kernel 2 – scatter (sequence path)
@@ -201,143 +149,89 @@ template <
     typename offset_t,
     typename index_t,
     typename scalar_t>
-class BlockBucketizeScatterSeqKernel {
-public:
-    BlockBucketizeScatterSeqKernel(
-        int64_t lengths_size,
-        int64_t B,
-        int64_t my_size,
-        const offset_t* offsets_data,
-        const index_t* indices_data,
-        const scalar_t* weights_data,
-        const index_t* block_sizes_data,
-        const offset_t* length_to_feature_idx,
-        const index_t* block_bucketize_pos_concat,
-        const index_t* block_bucketize_pos_offsets,
-        const index_t* indices_to_lb,
-        const index_t* total_num_blocks,
-        offset_t* new_offsets_data,
-        index_t* new_indices_data,
-        scalar_t* new_weights_data,
-        index_t* new_pos_data,
-        index_t* unbucketize_permute_data,
-        index_t* bag_mapping_data,
-        const bool* keep_orig_idx_per_feature,
-        bool keep_orig_idx)
-      : lengths_size_(lengths_size), B_(B), my_size_(my_size),
-        offsets_data_(offsets_data), indices_data_(indices_data),
-        weights_data_(weights_data), block_sizes_data_(block_sizes_data),
-        length_to_feature_idx_(length_to_feature_idx),
-        block_bucketize_pos_concat_(block_bucketize_pos_concat),
-        block_bucketize_pos_offsets_(block_bucketize_pos_offsets),
-        indices_to_lb_(indices_to_lb), total_num_blocks_(total_num_blocks),
-        new_offsets_data_(new_offsets_data), new_indices_data_(new_indices_data),
-        new_weights_data_(new_weights_data), new_pos_data_(new_pos_data),
-        unbucketize_permute_data_(unbucketize_permute_data),
-        bag_mapping_data_(bag_mapping_data),
-        keep_orig_idx_per_feature_(keep_orig_idx_per_feature),
-        keep_orig_idx_(keep_orig_idx) {}
+void BlockBucketizeScatterSeqKernel<
+        has_weight, bucketize_pos_flag, return_bucket_mapping,
+        offset_t, index_t, scalar_t>::operator()(
+        const sycl::nd_item<1>& item) const {
+    using uindex_t = std::make_unsigned_t<index_t>;
+    const int64_t global_id = item.get_global_id(0);
+    const int64_t global_range = item.get_global_range(0);
 
-    void operator()(const sycl::nd_item<1>& item) const {
-        using uindex_t = std::make_unsigned_t<index_t>;
-        const int64_t global_id = item.get_global_id(0);
-        const int64_t global_range = item.get_global_range(0);
+    for (int64_t b_t = global_id; b_t < lengths_size_; b_t += global_range) {
+        const offset_t t = length_to_feature_idx_
+            ? static_cast<offset_t>(length_to_feature_idx_[b_t])
+            : static_cast<offset_t>(b_t / B_);
+        const index_t blk_size = block_sizes_data_[t];
 
-        for (int64_t b_t = global_id; b_t < lengths_size_; b_t += global_range) {
-            const offset_t t = length_to_feature_idx_
-                ? static_cast<offset_t>(length_to_feature_idx_[b_t])
-                : static_cast<offset_t>(b_t / B_);
-            const index_t blk_size = block_sizes_data_[t];
+        const index_t local_num_blks = total_num_blocks_
+            ? (total_num_blocks_[t] / static_cast<index_t>(my_size_))
+            : 1;
+        const index_t global_num_blks = total_num_blocks_
+            ? total_num_blocks_[t]
+            : static_cast<index_t>(my_size_);
+        const index_t global_idx_size = blk_size * global_num_blks;
+        const index_t local_idx_size  = blk_size * local_num_blks;
 
-            const index_t local_num_blks = total_num_blocks_
-                ? (total_num_blocks_[t] / static_cast<index_t>(my_size_))
-                : 1;
-            const index_t global_num_blks = total_num_blocks_
-                ? total_num_blocks_[t]
-                : static_cast<index_t>(my_size_);
-            const index_t global_idx_size = blk_size * global_num_blks;
-            const index_t local_idx_size  = blk_size * local_num_blks;
+        const offset_t rowstart = (b_t == 0) ? 0 : offsets_data_[b_t - 1];
+        const offset_t rowend   = offsets_data_[b_t];
+        const bool use_bbp = (block_bucketize_pos_concat_ != nullptr);
 
-            const offset_t rowstart = (b_t == 0) ? 0 : offsets_data_[b_t - 1];
-            const offset_t rowend   = offsets_data_[b_t];
-            const bool use_bbp = (block_bucketize_pos_concat_ != nullptr);
+        bool keep_idx = keep_orig_idx_;
+        if (keep_orig_idx_per_feature_ != nullptr) {
+            keep_idx = keep_orig_idx_per_feature_[t];
+        }
 
-            bool keep_idx = keep_orig_idx_;
-            if (keep_orig_idx_per_feature_ != nullptr) {
-                keep_idx = keep_orig_idx_per_feature_[t];
+        for (offset_t i = rowstart; i < rowend; ++i) {
+            const uindex_t idx = static_cast<uindex_t>(indices_data_[i]);
+            uindex_t p, new_idx;
+
+            if (!use_bbp) {
+                p = (idx < static_cast<uindex_t>(global_idx_size))
+                    ? idx / static_cast<uindex_t>(local_idx_size)
+                    : (idx % static_cast<uindex_t>(global_num_blks))
+                          / static_cast<uindex_t>(local_num_blks);
+                if (keep_idx) {
+                    new_idx = idx;
+                } else if (idx < static_cast<uindex_t>(global_idx_size)) {
+                    new_idx = idx % static_cast<uindex_t>(local_idx_size);
+                } else {
+                    new_idx = idx / static_cast<uindex_t>(global_num_blks);
+                }
+            } else {
+                const index_t first_off = block_bucketize_pos_offsets_[t];
+                index_t lb = indices_to_lb_[i];
+                p = (lb < static_cast<index_t>(my_size_))
+                    ? static_cast<uindex_t>(lb)
+                    : (idx % static_cast<uindex_t>(my_size_));
+                if (keep_idx) {
+                    new_idx = idx;
+                } else if (blk_size == 0) {
+                    new_idx = idx / static_cast<uindex_t>(global_num_blks);
+                } else if (lb < static_cast<index_t>(my_size_)) {
+                    new_idx = idx - static_cast<uindex_t>(
+                        block_bucketize_pos_concat_[lb + first_off]);
+                } else {
+                    new_idx = idx / static_cast<uindex_t>(my_size_);
+                }
             }
 
-            for (offset_t i = rowstart; i < rowend; ++i) {
-                const uindex_t idx = static_cast<uindex_t>(indices_data_[i]);
-                uindex_t p, new_idx;
-
-                if (!use_bbp) {
-                    p = (idx < static_cast<uindex_t>(global_idx_size))
-                        ? idx / static_cast<uindex_t>(local_idx_size)
-                        : (idx % static_cast<uindex_t>(global_num_blks))
-                              / static_cast<uindex_t>(local_num_blks);
-                    if (keep_idx) {
-                        new_idx = idx;
-                    } else if (idx < static_cast<uindex_t>(global_idx_size)) {
-                        new_idx = idx % static_cast<uindex_t>(local_idx_size);
-                    } else {
-                        new_idx = idx / static_cast<uindex_t>(global_num_blks);
-                    }
-                } else {
-                    const index_t first_off = block_bucketize_pos_offsets_[t];
-                    index_t lb = indices_to_lb_[i];
-                    p = (lb < static_cast<index_t>(my_size_))
-                        ? static_cast<uindex_t>(lb)
-                        : (idx % static_cast<uindex_t>(my_size_));
-                    if (keep_idx) {
-                        new_idx = idx;
-                    } else if (blk_size == 0) {
-                        new_idx = idx / static_cast<uindex_t>(global_num_blks);
-                    } else if (lb < static_cast<index_t>(my_size_)) {
-                        new_idx = idx - static_cast<uindex_t>(
-                            block_bucketize_pos_concat_[lb + first_off]);
-                    } else {
-                        new_idx = idx / static_cast<uindex_t>(my_size_);
-                    }
-                }
-
-                const offset_t pos = new_offsets_data_[p * lengths_size_ + b_t];
-                new_indices_data_[pos] = static_cast<index_t>(new_idx);
-                new_offsets_data_[p * lengths_size_ + b_t]++;
-                unbucketize_permute_data_[i] = static_cast<index_t>(pos);
-                if constexpr (return_bucket_mapping) {
-                    bag_mapping_data_[i] = static_cast<index_t>(p);
-                }
-                if constexpr (has_weight) {
-                    new_weights_data_[pos] = weights_data_[i];
-                }
-                if constexpr (bucketize_pos_flag) {
-                    new_pos_data_[pos] = static_cast<index_t>(i - rowstart);
-                }
+            const offset_t pos = new_offsets_data_[p * lengths_size_ + b_t];
+            new_indices_data_[pos] = static_cast<index_t>(new_idx);
+            new_offsets_data_[p * lengths_size_ + b_t]++;
+            unbucketize_permute_data_[i] = static_cast<index_t>(pos);
+            if constexpr (return_bucket_mapping) {
+                bag_mapping_data_[i] = static_cast<index_t>(p);
+            }
+            if constexpr (has_weight) {
+                new_weights_data_[pos] = weights_data_[i];
+            }
+            if constexpr (bucketize_pos_flag) {
+                new_pos_data_[pos] = static_cast<index_t>(i - rowstart);
             }
         }
     }
+}
 
-private:
-    int64_t lengths_size_, B_, my_size_;
-    const offset_t* offsets_data_;
-    const index_t* indices_data_;
-    const scalar_t* weights_data_;
-    const index_t* block_sizes_data_;
-    const offset_t* length_to_feature_idx_;
-    const index_t* block_bucketize_pos_concat_;
-    const index_t* block_bucketize_pos_offsets_;
-    const index_t* indices_to_lb_;
-    const index_t* total_num_blocks_;
-    offset_t* new_offsets_data_;
-    index_t* new_indices_data_;
-    scalar_t* new_weights_data_;
-    index_t* new_pos_data_;
-    index_t* unbucketize_permute_data_;
-    index_t* bag_mapping_data_;
-    const bool* keep_orig_idx_per_feature_;
-    bool keep_orig_idx_;
-};
 
 // ============================================================================
 // Kernel 3 – scatter (pooled / non-sequence path)
@@ -351,134 +245,86 @@ template <
     typename offset_t,
     typename index_t,
     typename scalar_t>
-class BlockBucketizeScatterPooledKernel {
-public:
-    BlockBucketizeScatterPooledKernel(
-        int64_t lengths_size,
-        int64_t B,
-        int64_t my_size,
-        const offset_t* offsets_data,
-        const index_t* indices_data,
-        const scalar_t* weights_data,
-        const index_t* block_sizes_data,
-        const offset_t* length_to_feature_idx,
-        const index_t* block_bucketize_pos_concat,
-        const index_t* block_bucketize_pos_offsets,
-        const index_t* indices_to_lb,
-        const index_t* total_num_blocks,
-        offset_t* new_offsets_data,
-        index_t* new_indices_data,
-        scalar_t* new_weights_data,
-        index_t* new_pos_data,
-        const bool* keep_orig_idx_per_feature,
-        bool keep_orig_idx)
-      : lengths_size_(lengths_size), B_(B), my_size_(my_size),
-        offsets_data_(offsets_data), indices_data_(indices_data),
-        weights_data_(weights_data), block_sizes_data_(block_sizes_data),
-        length_to_feature_idx_(length_to_feature_idx),
-        block_bucketize_pos_concat_(block_bucketize_pos_concat),
-        block_bucketize_pos_offsets_(block_bucketize_pos_offsets),
-        indices_to_lb_(indices_to_lb), total_num_blocks_(total_num_blocks),
-        new_offsets_data_(new_offsets_data), new_indices_data_(new_indices_data),
-        new_weights_data_(new_weights_data), new_pos_data_(new_pos_data),
-        keep_orig_idx_per_feature_(keep_orig_idx_per_feature),
-        keep_orig_idx_(keep_orig_idx) {}
+void BlockBucketizeScatterPooledKernel<
+        has_weight, bucketize_pos_flag,
+        offset_t, index_t, scalar_t>::operator()(
+        const sycl::nd_item<1>& item) const {
+    using uindex_t = std::make_unsigned_t<index_t>;
+    const int64_t global_id = item.get_global_id(0);
+    const int64_t global_range = item.get_global_range(0);
 
-    void operator()(const sycl::nd_item<1>& item) const {
-        using uindex_t = std::make_unsigned_t<index_t>;
-        const int64_t global_id = item.get_global_id(0);
-        const int64_t global_range = item.get_global_range(0);
+    for (int64_t b_t = global_id; b_t < lengths_size_; b_t += global_range) {
+        const offset_t t = length_to_feature_idx_
+            ? static_cast<offset_t>(length_to_feature_idx_[b_t])
+            : static_cast<offset_t>(b_t / B_);
+        const index_t blk_size = block_sizes_data_[t];
 
-        for (int64_t b_t = global_id; b_t < lengths_size_; b_t += global_range) {
-            const offset_t t = length_to_feature_idx_
-                ? static_cast<offset_t>(length_to_feature_idx_[b_t])
-                : static_cast<offset_t>(b_t / B_);
-            const index_t blk_size = block_sizes_data_[t];
+        const index_t local_num_blks = total_num_blocks_
+            ? (total_num_blocks_[t] / static_cast<index_t>(my_size_))
+            : 1;
+        const index_t global_num_blks = total_num_blocks_
+            ? total_num_blocks_[t]
+            : static_cast<index_t>(my_size_);
+        const index_t global_idx_size = blk_size * global_num_blks;
+        const index_t local_idx_size  = blk_size * local_num_blks;
 
-            const index_t local_num_blks = total_num_blocks_
-                ? (total_num_blocks_[t] / static_cast<index_t>(my_size_))
-                : 1;
-            const index_t global_num_blks = total_num_blocks_
-                ? total_num_blocks_[t]
-                : static_cast<index_t>(my_size_);
-            const index_t global_idx_size = blk_size * global_num_blks;
-            const index_t local_idx_size  = blk_size * local_num_blks;
+        const offset_t rowstart = (b_t == 0) ? 0 : offsets_data_[b_t - 1];
+        const offset_t rowend   = offsets_data_[b_t];
+        const bool use_bbp = (block_bucketize_pos_concat_ != nullptr);
 
-            const offset_t rowstart = (b_t == 0) ? 0 : offsets_data_[b_t - 1];
-            const offset_t rowend   = offsets_data_[b_t];
-            const bool use_bbp = (block_bucketize_pos_concat_ != nullptr);
+        bool keep_idx = keep_orig_idx_;
+        if (keep_orig_idx_per_feature_ != nullptr) {
+            keep_idx = keep_orig_idx_per_feature_[t];
+        }
 
-            bool keep_idx = keep_orig_idx_;
-            if (keep_orig_idx_per_feature_ != nullptr) {
-                keep_idx = keep_orig_idx_per_feature_[t];
+        for (offset_t i = rowstart; i < rowend; ++i) {
+            const uindex_t idx = static_cast<uindex_t>(indices_data_[i]);
+            uindex_t p, new_idx;
+
+            if (!use_bbp) {
+                p = (idx < static_cast<uindex_t>(global_idx_size))
+                    ? idx / static_cast<uindex_t>(local_idx_size)
+                    : (idx % static_cast<uindex_t>(global_num_blks))
+                          / static_cast<uindex_t>(local_num_blks);
+                if (keep_idx) {
+                    new_idx = idx;
+                } else if (idx < static_cast<uindex_t>(global_idx_size)) {
+                    new_idx = idx % static_cast<uindex_t>(local_idx_size);
+                } else {
+                    new_idx = idx / static_cast<uindex_t>(global_num_blks);
+                }
+            } else {
+                const index_t first_off = block_bucketize_pos_offsets_[t];
+                index_t lb = indices_to_lb_[i];
+                p = (lb < static_cast<index_t>(my_size_))
+                    ? static_cast<uindex_t>(lb)
+                    : (idx % static_cast<uindex_t>(my_size_));
+                if (keep_idx) {
+                    new_idx = idx;
+                } else if (blk_size == 0) {
+                    new_idx = idx / static_cast<uindex_t>(global_num_blks);
+                } else if (lb < static_cast<index_t>(my_size_)) {
+                    new_idx = idx - static_cast<uindex_t>(
+                        block_bucketize_pos_concat_[lb + first_off]);
+                } else {
+                    new_idx = idx / static_cast<uindex_t>(my_size_);
+                }
             }
 
-            for (offset_t i = rowstart; i < rowend; ++i) {
-                const uindex_t idx = static_cast<uindex_t>(indices_data_[i]);
-                uindex_t p, new_idx;
-
-                if (!use_bbp) {
-                    p = (idx < static_cast<uindex_t>(global_idx_size))
-                        ? idx / static_cast<uindex_t>(local_idx_size)
-                        : (idx % static_cast<uindex_t>(global_num_blks))
-                              / static_cast<uindex_t>(local_num_blks);
-                    if (keep_idx) {
-                        new_idx = idx;
-                    } else if (idx < static_cast<uindex_t>(global_idx_size)) {
-                        new_idx = idx % static_cast<uindex_t>(local_idx_size);
-                    } else {
-                        new_idx = idx / static_cast<uindex_t>(global_num_blks);
-                    }
-                } else {
-                    const index_t first_off = block_bucketize_pos_offsets_[t];
-                    index_t lb = indices_to_lb_[i];
-                    p = (lb < static_cast<index_t>(my_size_))
-                        ? static_cast<uindex_t>(lb)
-                        : (idx % static_cast<uindex_t>(my_size_));
-                    if (keep_idx) {
-                        new_idx = idx;
-                    } else if (blk_size == 0) {
-                        new_idx = idx / static_cast<uindex_t>(global_num_blks);
-                    } else if (lb < static_cast<index_t>(my_size_)) {
-                        new_idx = idx - static_cast<uindex_t>(
-                            block_bucketize_pos_concat_[lb + first_off]);
-                    } else {
-                        new_idx = idx / static_cast<uindex_t>(my_size_);
-                    }
-                }
-
-                // Thread b_t owns column b_t of new_offsets → no atomics
-                const offset_t pos = new_offsets_data_[p * lengths_size_ + b_t];
-                new_indices_data_[pos] = static_cast<index_t>(new_idx);
-                new_offsets_data_[p * lengths_size_ + b_t]++;
-                if constexpr (has_weight) {
-                    new_weights_data_[pos] = weights_data_[i];
-                }
-                if constexpr (bucketize_pos_flag) {
-                    new_pos_data_[pos] = static_cast<index_t>(i - rowstart);
-                }
+            // Thread b_t owns column b_t of new_offsets → no atomics
+            const offset_t pos = new_offsets_data_[p * lengths_size_ + b_t];
+            new_indices_data_[pos] = static_cast<index_t>(new_idx);
+            new_offsets_data_[p * lengths_size_ + b_t]++;
+            if constexpr (has_weight) {
+                new_weights_data_[pos] = weights_data_[i];
+            }
+            if constexpr (bucketize_pos_flag) {
+                new_pos_data_[pos] = static_cast<index_t>(i - rowstart);
             }
         }
     }
+}
 
-private:
-    int64_t lengths_size_, B_, my_size_;
-    const offset_t* offsets_data_;
-    const index_t* indices_data_;
-    const scalar_t* weights_data_;
-    const index_t* block_sizes_data_;
-    const offset_t* length_to_feature_idx_;
-    const index_t* block_bucketize_pos_concat_;
-    const index_t* block_bucketize_pos_offsets_;
-    const index_t* indices_to_lb_;
-    const index_t* total_num_blocks_;
-    offset_t* new_offsets_data_;
-    index_t* new_indices_data_;
-    scalar_t* new_weights_data_;
-    index_t* new_pos_data_;
-    const bool* keep_orig_idx_per_feature_;
-    bool keep_orig_idx_;
-};
 
 // ============================================================================
 // Kernel 4 – populate_bucketized_permute
@@ -486,78 +332,38 @@ private:
 // ============================================================================
 
 template <typename offset_t, typename index_t>
-class PopulateBucketizedPermuteKernel {
-public:
-    PopulateBucketizedPermuteKernel(
-        const offset_t* length_data,
-        const offset_t* offset_data,
-        offset_t* bucketized_offsets_data,
-        const index_t* bucket_mapping_data,
-        index_t* bucketized_permute_data,
-        int64_t lengths_size)
-      : length_data_(length_data), offset_data_(offset_data),
-        bucketized_offsets_data_(bucketized_offsets_data),
-        bucket_mapping_data_(bucket_mapping_data),
-        bucketized_permute_data_(bucketized_permute_data),
-        lengths_size_(lengths_size) {}
+void PopulateBucketizedPermuteKernel<offset_t, index_t>::operator()(
+        const sycl::nd_item<1>& item) const {
+    const int64_t global_id = item.get_global_id(0);
+    const int64_t global_range = item.get_global_range(0);
 
-    void operator()(const sycl::nd_item<1>& item) const {
-        const int64_t global_id = item.get_global_id(0);
-        const int64_t global_range = item.get_global_range(0);
-
-        for (int64_t b_t = global_id; b_t < lengths_size_; b_t += global_range) {
-            const offset_t length = length_data_[b_t];
-            const offset_t offset = offset_data_[b_t];
-            for (offset_t j = 0; j < length; ++j) {
-                const offset_t idx = offset + j;
-                const index_t bucket = bucket_mapping_data_[idx];
-                bucketized_permute_data_[idx] = static_cast<index_t>(
-                    bucketized_offsets_data_[bucket * lengths_size_ + b_t]++);
-            }
+    for (int64_t b_t = global_id; b_t < lengths_size_; b_t += global_range) {
+        const offset_t length = length_data_[b_t];
+        const offset_t offset = offset_data_[b_t];
+        for (offset_t j = 0; j < length; ++j) {
+            const offset_t idx = offset + j;
+            const index_t bucket = bucket_mapping_data_[idx];
+            bucketized_permute_data_[idx] = static_cast<index_t>(
+                bucketized_offsets_data_[bucket * lengths_size_ + b_t]++);
         }
     }
+}
 
-private:
-    const offset_t* length_data_;
-    const offset_t* offset_data_;
-    offset_t* bucketized_offsets_data_;
-    const index_t* bucket_mapping_data_;
-    index_t* bucketized_permute_data_;
-    int64_t lengths_size_;
-};
 
 // ============================================================================
 // Helpers: variable-batch length_to_feature_idx population
 // ============================================================================
 
 template <typename offset_t>
-class PopulateLengthToFeatureIdxKernel {
-public:
-    PopulateLengthToFeatureIdxKernel(
-        int64_t max_B,
-        int64_t T,
-        const offset_t* batch_size_per_feature,
-        const offset_t* batch_size_offsets,
-        offset_t* length_to_feature_idx)
-      : max_B_(max_B), T_(T),
-        batch_size_per_feature_(batch_size_per_feature),
-        batch_size_offsets_(batch_size_offsets),
-        length_to_feature_idx_(length_to_feature_idx) {}
+void PopulateLengthToFeatureIdxKernel<offset_t>::operator()(
+        const sycl::nd_item<1>& item) const {
+    const int64_t b_t = item.get_global_id(0);
+    const int64_t t = b_t / max_B_;
+    const int64_t b = b_t % max_B_;
+    if (t >= T_ || static_cast<offset_t>(b) >= batch_size_per_feature_[t]) return;
+    length_to_feature_idx_[batch_size_offsets_[t] + b] = static_cast<offset_t>(t);
+}
 
-    void operator()(const sycl::nd_item<1>& item) const {
-        const int64_t b_t = item.get_global_id(0);
-        const int64_t t = b_t / max_B_;
-        const int64_t b = b_t % max_B_;
-        if (t >= T_ || static_cast<offset_t>(b) >= batch_size_per_feature_[t]) return;
-        length_to_feature_idx_[batch_size_offsets_[t] + b] = static_cast<offset_t>(t);
-    }
-
-private:
-    int64_t max_B_, T_;
-    const offset_t* batch_size_per_feature_;
-    const offset_t* batch_size_offsets_;
-    offset_t* length_to_feature_idx_;
-};
 
 // ============================================================================
 // Host-side launcher helpers
