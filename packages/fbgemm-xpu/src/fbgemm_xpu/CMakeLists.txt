@@ -53,6 +53,8 @@ set(host_sources
     ${CMAKE_CURRENT_SOURCE_DIR}/sycl_kernels/block_bucketize_sparse_features.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sycl_kernels/reorder_batched_ad.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reorder_batched_ad_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sycl_kernels/jagged_tensor_ops_kernels.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/jagged_tensorOps.cpp
 )
 
 set(all_sources ${host_sources})

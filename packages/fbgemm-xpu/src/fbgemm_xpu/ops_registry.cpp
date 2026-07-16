@@ -370,4 +370,62 @@ TORCH_LIBRARY_FRAGMENT(fbgemm, m) {
             "    int num_indices_after_broadcast=-1"
             ") -> Tensor");
     }
+
+    // ===== Jagged Tensor Operators =====
+
+    if (!schemaExists("fbgemm::dense_to_jagged")) {
+        m.def(
+            "dense_to_jagged("
+            "    Tensor dense, "
+            "    Tensor[] x_offsets, "
+            "    SymInt? total_L=None"
+            ") -> (Tensor, Tensor[])");
+    }
+
+    if (!schemaExists("fbgemm::dense_to_jagged_forward")) {
+        m.def(
+            "dense_to_jagged_forward("
+            "    Tensor dense, "
+            "    Tensor[] x_offsets, "
+            "    SymInt? total_L=None"
+            ") -> Tensor");
+    }
+
+    if (!schemaExists("fbgemm::jagged_to_padded_dense")) {
+        m.def(
+            "jagged_to_padded_dense("
+            "    Tensor values, "
+            "    Tensor[] offsets, "
+            "    SymInt[] max_lengths, "
+            "    float padding_value=0.0"
+            ") -> Tensor");
+    }
+
+    if (!schemaExists("fbgemm::jagged_to_padded_dense_forward")) {
+        m.def(
+            "jagged_to_padded_dense_forward("
+            "    Tensor values, "
+            "    Tensor[] offsets, "
+            "    SymInt[] max_lengths, "
+            "    float padding_value=0.0"
+            ") -> Tensor");
+    }
+
+    if (!schemaExists("fbgemm::jagged_dense_elementwise_add_jagged_output")) {
+        m.def(
+            "jagged_dense_elementwise_add_jagged_output("
+            "    Tensor x_values, "
+            "    Tensor[] x_offsets, "
+            "    Tensor y"
+            ") -> (Tensor, Tensor[])");
+    }
+
+    if (!schemaExists("fbgemm::jagged_2d_to_dense")) {
+        m.def(
+            "jagged_2d_to_dense("
+            "    Tensor values, "
+            "    Tensor offsets, "
+            "    SymInt max_sequence_length"
+            ") -> Tensor");
+    }
 }
