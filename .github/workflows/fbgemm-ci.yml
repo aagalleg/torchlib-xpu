@@ -1,4 +1,4 @@
-name: ci-fbgemm-xpu
+name: FBGEMM CI
 
 # This workflow builds manylinux fbgemm-xpu wheels. Kernels are SYCL-based 
 # and compiled with the Intel oneAPI compiler (icpx).
@@ -13,10 +13,16 @@ on:
     branches:
       - main
       - 'release/**'
+    paths:
+      - 'packages/fbgemm-xpu/**'
+      - '.github/workflows/fbgemm-ci.yml'
   pull_request:
     branches:
       - main
       - 'release/**'
+    paths:
+      - 'packages/fbgemm-xpu/**'
+      - '.github/workflows/fbgemm-ci.yml'
   release:
     types:
       - published
