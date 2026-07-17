@@ -5,12 +5,10 @@
 # Import torch first to ensure libtorch.so is loaded before our C extension.
 # The _C module links against PyTorch libraries, and the dynamic linker needs
 # those symbols to be available in memory before loading our extension.
-import torch  # noqa: F401
-
 # Import fbgemm_gpu first so that all "fbgemm" operator schemas are registered
 # before _C loads the XPU implementations via TORCH_LIBRARY_IMPL.
 import fbgemm_gpu  # noqa: F401, E402
-
+import torch  # noqa: F401
 
 # Import the compiled C extension (_C) which contains the registered operators.
 # If native dependencies are unavailable, keep import working so metadata like
