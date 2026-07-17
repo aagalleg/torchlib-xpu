@@ -38,8 +38,15 @@ at::Tensor asynchronous_complete_cumsum_xpu(const at::Tensor& t_in) {
   return t_out;
 }
 
+// The operator registration must happen exactly once. This source file is also
+// compiled into the training extension (_C_training), where backward_utils
+// calls asynchronous_complete_cumsum_xpu() directly as a C++ helper and does
+// not need the dispatcher registration. Guarding it out there prevents a
+// duplicate XPU registration for fbgemm::asynchronous_complete_cumsum.
+#ifndef FBGEMM_XPU_TRAINING_BUILD
 TORCH_LIBRARY_IMPL(fbgemm, XPU, m) {
-  m.impl("asynchronous_complete_cumsum", &fbgemm_xpu::asynchronous_complete_cumsum_xpu);
+  m.impl("asynchronous_complete_cumsum", &asynchronous_complete_cumsum_xpu);
 }
+#endif // FBGEMM_XPU_TRAINING_BUILD
 
 } // namespace fbgemm_xpu
