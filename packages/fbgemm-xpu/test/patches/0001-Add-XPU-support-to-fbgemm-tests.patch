@@ -11,8 +11,8 @@ Signed-off-by: Alberto Gallegos <alberto.gallegos.muro@intel.com>
 ---
  fbgemm_gpu/test/sparse/cumsum_test.py              |  16 +++++--
  fbgemm_gpu/test/sparse/misc_ops_test.py            |  18 ++++++--
- .../test/sparse/permute_sparse_features_test.py    |  48 ++++++++++----------
- 3 files changed, 51 insertions(+), 31 deletions(-)
+ .../test/sparse/permute_sparse_features_test.py    |  49 +++++++++++----------
+ 3 files changed, 52 insertions(+), 31 deletions(-)
 
 diff --git a/fbgemm_gpu/test/sparse/misc_ops_test.py b/fbgemm_gpu/test/sparse/misc_ops_test.py
 index f3371677e..73a1641e8 100644
@@ -155,7 +155,13 @@ index 2b8302739..296f7e122 100644
          # Execute: Call the permute_1D_sparse_data operation
          (
              lengths_actual,
-@@ -340,19 +342,19 @@ class Permute2DSparseFeaturesTest(unittest.TestCase):
+@@ -335,24 +337,24 @@ class Permute1DSparseFeaturesTest(unittest.TestCase):
+ 
+ 
+ class Permute2DSparseFeaturesTest(unittest.TestCase):
+-    @unittest.skipIf(*gpu_unavailable)
++    @unittest.skipIf(not xpu_available, "XPU not available")
+     def test_permute_2D_sparse_data(self) -> None:
          lengths = torch.tensor(
              [[0, 0, 1], [0, 1, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 1]],
              dtype=torch.int32,
