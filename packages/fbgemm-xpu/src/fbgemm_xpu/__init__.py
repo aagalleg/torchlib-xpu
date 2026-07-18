@@ -28,8 +28,6 @@ try:
 except ImportError:
     _C_training = None
 
-from . import ops as ops
-
 __all__ = ["_C", "_C_training", "ops", "__version__"]
 
 try:
