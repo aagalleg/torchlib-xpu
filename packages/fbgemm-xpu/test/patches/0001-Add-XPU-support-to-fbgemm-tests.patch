@@ -8,14 +8,18 @@ Includes support for permute_1D_sparse_data and permute_2D_sparse_data operators
 Also adds XPU support to test_asynchronous_complete_cumsum_2d in cumsum_test.py.
 Adds XPU support to block_bucketize_test.py for the block_bucketize_sparse_features
 and block_bucketize_sparse_features_inference operators.
+Adds XPU support to reorder_batched_test.py for the reorder_batched_ad_lengths
+and reorder_batched_ad_indices operators.
 
 Signed-off-by: Alberto Gallegos <alberto.gallegos.muro@intel.com>
+Co-authored-by: Felipe Leza Alvarez <felipe.leza.alvarez@intel.com>
 ---
  fbgemm_gpu/test/sparse/block_bucketize_test.py     | 165 +++++++++++++--------
  fbgemm_gpu/test/sparse/cumsum_test.py              |  16 +++++--
  fbgemm_gpu/test/sparse/misc_ops_test.py            |  18 ++++++--
  .../test/sparse/permute_sparse_features_test.py    |  49 +++++++++++----------
- 4 files changed, 127 insertions(+), 102 deletions(-)
+ fbgemm_gpu/test/sparse/reorder_batched_test.py     |  34 +++++++++++++++-------
+ 5 files changed, 149 insertions(+), 114 deletions(-)
 
 diff --git a/fbgemm_gpu/test/sparse/misc_ops_test.py b/fbgemm_gpu/test/sparse/misc_ops_test.py
 index f3371677e..73a1641e8 100644
@@ -716,6 +720,120 @@ index edd8a0929..b6974b328 100644
              )
  
              torch.testing.assert_close(
-
+diff --git a/fbgemm_gpu/test/sparse/reorder_batched_test.py b/fbgemm_gpu/test/sparse/reorder_batched_test.py
+index 216730e4e..de9b01ba7 100644
+--- a/fbgemm_gpu/test/sparse/reorder_batched_test.py
++++ b/fbgemm_gpu/test/sparse/reorder_batched_test.py
+@@ -25,9 +25,14 @@ else:
+     import fbgemm_gpu.sparse_ops  # noqa: F401, E402
+     from fbgemm_gpu.test.test_utils import gpu_unavailable, skipIfRocm
+ 
++# Registers the XPU (Intel GPU) FBGEMM operator implementations.
++import fbgemm_xpu  # noqa: F401, E402
++
++xpu_available: bool = torch.xpu.is_available()
++
+ 
+ class ReorderBatchedTest(unittest.TestCase):
+-    @unittest.skipIf(*gpu_unavailable)
++    @unittest.skipIf(not xpu_available, "XPU not available")
+     @given(
+         B=st.integers(min_value=1, max_value=20),
+         T=st.integers(min_value=1, max_value=20),
+@@ -49,7 +54,7 @@ class ReorderBatchedTest(unittest.TestCase):
+         if broadcast_lengths:
+             cat_ad_lengths = (
+                 torch.cat([torch.tensor([L for _ in range(T)]) for _ in range(B)], 0)
+-                .cuda()
++                .xpu()
+                 .to(Dtype)
+             )
+             cat_ad_lengths_broadcasted = cat_ad_lengths.tile([A])
+@@ -58,11 +63,11 @@ class ReorderBatchedTest(unittest.TestCase):
+                 torch.cat(
+                     [torch.tensor([L for _ in range(T * A)]) for _ in range(B)], 0
+                 )
+-                .cuda()
++                .xpu()
+                 .to(Dtype)
+             )
+             cat_ad_lengths_broadcasted = cat_ad_lengths
+-        batch_offsets = torch.tensor([A * b for b in range(B + 1)]).int().cuda()
++        batch_offsets = torch.tensor([A * b for b in range(B + 1)]).int().xpu()
+         num_ads_in_batch = B * A
+         reordered_batched_ad_lengths = torch.ops.fbgemm.reorder_batched_ad_lengths(
+             cat_ad_lengths, batch_offsets, num_ads_in_batch, broadcast_lengths
+@@ -124,7 +129,7 @@ class ReorderBatchedTest(unittest.TestCase):
+         )
+ 
+     @skipIfRocm
+-    @unittest.skipIf(*gpu_unavailable)
++    @unittest.skipIf(not xpu_available, "XPU not available")
+     @given(
+         B=st.integers(min_value=1, max_value=20),
+         T=st.integers(min_value=1, max_value=20),
+@@ -153,7 +158,7 @@ class ReorderBatchedTest(unittest.TestCase):
+                     size=(B * T * L,),
+                 )
+                 .int()
+-                .cuda()
++                .xpu()
+                 .to(Dtype)
+             )
+             cat_ad_lengths = (
+@@ -162,7 +167,7 @@ class ReorderBatchedTest(unittest.TestCase):
+                     0,
+                 )
+                 .int()
+-                .cuda()
++                .xpu()
+             )
+             cat_ad_lengths_broadcasted = cat_ad_lengths.tile([A])
+         else:
+@@ -173,7 +178,7 @@ class ReorderBatchedTest(unittest.TestCase):
+                     size=(B * T * A * L,),
+                 )
+                 .int()
+-                .cuda()
++                .xpu()
+                 .to(Dtype)
+             )
+             cat_ad_lengths = (
+@@ -182,10 +187,10 @@ class ReorderBatchedTest(unittest.TestCase):
+                     0,
+                 )
+                 .int()
+-                .cuda()
++                .xpu()
+             )
+             cat_ad_lengths_broadcasted = cat_ad_lengths
+-        batch_offsets = torch.tensor([A * b for b in range(B + 1)]).int().cuda()
++        batch_offsets = torch.tensor([A * b for b in range(B + 1)]).int().xpu()
+         num_ads_in_batch = B * A
+         reordered_cat_ad_lengths = torch.ops.fbgemm.reorder_batched_ad_lengths(
+             cat_ad_lengths, batch_offsets, num_ads_in_batch, broadcast_indices
+@@ -498,6 +503,7 @@ class ReorderBatchedTest(unittest.TestCase):
+             reordered_sequence_embedding_from_indices, reordered_cat_sequence_embeddings
+         )
+ 
++    @unittest.skip("Operator not implemented on XPU")
+     @skipIfRocm
+     @unittest.skipIf(*gpu_unavailable)
+     @given(
+@@ -522,8 +528,12 @@ class ReorderBatchedTest(unittest.TestCase):
+     ) -> None:
+         MAX_H = 1000
+         DIM = 32
+-        device = torch.device("cuda")
+-        ref_embeddings = torch.rand(MAX_H, DIM, dtype=emb_dtype, device=device)
++        device = torch.device("xpu")
++        # torch.rand doesn't support uint8 on XPU, create on CPU and move
++        if emb_dtype == torch.uint8:
++            ref_embeddings = torch.rand(MAX_H, DIM, dtype=torch.float32).mul(255).to(torch.uint8).to(device)
++        else:
++            ref_embeddings = torch.rand(MAX_H, DIM, dtype=emb_dtype, device=device)
+         feature_lengths = [
+             torch.randint(
+                 1, L, (T, random.randint(1, B + 1)), dtype=index_dtype, device=device
 -- 
 2.43.0
