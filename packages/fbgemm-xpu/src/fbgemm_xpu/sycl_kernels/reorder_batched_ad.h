@@ -14,16 +14,16 @@
 //   File: fbgemm_gpu/src/sparse_ops/sparse_reorder_batched_ad.cu
 //
 // KERNEL MAPPING:
-//   reorder_batched_ad_lengths_kernel_<Dtype>
+//   reorder_batched_ad_lengths_kernel_<scalar_t>
 //     → reorder_batched_ad_lengths_kernel (CUDA)
 //
-//   narrow_broadcast_indices_kernel_<Dtype, index_t>
+//   narrow_broadcast_indices_kernel_<scalar_t, index_t>
 //     → narrow_broadcast_indices_kernel (CUDA)
 //
-//   narrow_batched_broadcast_indices_kernel_<Dtype, index_t>
+//   narrow_batched_broadcast_indices_kernel_<scalar_t, index_t>
 //     → narrow_batched_broadcast_indices_kernel (CUDA)
 //
-//   reorder_batched_ad_indices_kernel_<Dtype, index_t>
+//   reorder_batched_ad_indices_kernel_<scalar_t, index_t>
 //     → reorder_batched_ad_indices_kernel (CUDA)
 //
 // HOST FUNCTION MAPPING:
@@ -42,12 +42,13 @@
 
 #pragma once
 
+#include <sycl/sycl.hpp>
+#include <comm/SYCLContext.h>
+
 #include <ATen/ATen.h>
 #include <ATen/DeviceGuard.h>
 #include <ATen/native/xpu/sycl/KernelUtils.h>
 #include <ATen/native/StridedRandomAccessor.h>
-#include <sycl/sycl.hpp>
-#include <comm/SYCLContext.h>
 #include <torch/library.h>
 
 #include "../fbgemm_utils/utils.h"
