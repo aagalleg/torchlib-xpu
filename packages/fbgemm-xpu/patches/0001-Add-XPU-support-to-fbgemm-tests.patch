@@ -925,7 +925,7 @@ index 70b2ef276..16771feb4 100644
          known_shape: bool,
      ) -> None:
 -        device = torch.device("cpu" if use_cpu else "cuda")
-+        device = torch.device("cpu" if use_cpu else ("xpu" if xpu_available else "cuda"))
++        device = torch.device("xpu" if xpu_available else ("cpu" if use_cpu else "cuda"))
          is_float = jagged_tensor_dtype in [torch.float, torch.half, torch.bfloat16]
          lengths = torch.randint(
              low=0,
@@ -946,7 +946,7 @@ index 70b2ef276..16771feb4 100644
          use_cpu: bool,
      ) -> None:
 -        device = torch.device("cpu" if use_cpu else "cuda")
-+        device = torch.device("cpu" if use_cpu else ("xpu" if xpu_available else "cuda"))
++        device = torch.device("xpu" if xpu_available else ("cpu" if use_cpu else "cuda"))
          is_float = jagged_tensor_dtype in [torch.float, torch.half, torch.bfloat16]
          lengths = torch.randint(
              low=0,
