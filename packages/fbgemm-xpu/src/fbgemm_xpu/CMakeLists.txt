@@ -54,7 +54,7 @@ set(host_sources
     ${CMAKE_CURRENT_SOURCE_DIR}/sycl_kernels/reorder_batched_ad.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reorder_batched_ad_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sycl_kernels/jagged_tensor_ops_kernels.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/jagged_tensorOps.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/jagged_tensor_ops.cpp
 )
 
 set(all_sources ${host_sources})
