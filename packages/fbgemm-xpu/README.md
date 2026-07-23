@@ -64,7 +64,7 @@ python -c "import fbgemm_xpu; print(fbgemm_xpu.__version__)"
 
 Environment variables will be added as new FBGEMM operators are integrated into this project.
 
-## Known limitations
+## Known limitations 
 
 Known limitations will be documented as new FBGEMM operators are integrated into this project.
 
