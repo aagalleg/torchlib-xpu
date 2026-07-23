@@ -34,7 +34,6 @@
 #include <cstdint>
 
 #include <sycl/sycl.hpp>
-
 #include <c10/xpu/XPUStream.h>
 
 #include <ATen/ATen.h>

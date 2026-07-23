@@ -4,16 +4,32 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
- /*
- * SYCL/XPU Implementation of jagged_index_select_2d
- *
- * Performs 2D index selection on jagged tensors with offset-based indexing.
- */
+////////////////////////////////////////////////////////////////////////////////
+// SYCL PORT MAPPING TO FBGEMM CUDA SOURCE - JAGGED INDEX SELECT 2D KERNELS
+////////////////////////////////////////////////////////////////////////////////
+//
+// This file contains SYCL kernel and host implementations for the
+// jagged_index_select_2d forward operator, ported from FBGEMM CUDA.
+//
+// ORIGINAL CUDA SOURCE:
+//   File: fbgemm_gpu/src/jagged_tensor_ops/jagged_index_select_2d_forward.cu
+//
+// KERNEL MAPPING:
+//   JaggedIndexSelect2dKernel<scalar_t, index_t, offset_t>
+//     → jagged_index_select_2d_kernel (CUDA)
+//
+// HOST FUNCTION MAPPING:
+//   jagged_index_select_2d_forward_xpu
+//     → jagged_index_select_2d_forward_cuda (CUDA)
+//     CUDA File: fbgemm_gpu/src/jagged_tensor_ops/jagged_index_select_2d_forward.cu
+//
+////////////////////////////////////////////////////////////////////////////////
 
 #include <algorithm>
 
 #include <ATen/Dispatch.h>
 
+#include "fbgemm_utils/dispatch_macros.h"
 #include "jagged_index_select_2d.h"
 
 namespace fbgemm_xpu {
@@ -44,6 +60,22 @@ inline int binary_search_upper_bound(const T* data, int n, T target) {
 // SYCL Kernel Functor Implementation
 // ============================================================================
 
+////////////////////////////////////////////////////////////////////////////////
+// JaggedIndexSelect2dKernel::operator() - Device Kernel
+////////////////////////////////////////////////////////////////////////////////
+//
+// CUDA SOURCE MAPPING:
+//   CUDA Kernel: jagged_index_select_2d_kernel
+//   CUDA File: fbgemm_gpu/src/jagged_tensor_ops/jagged_index_select_2d_forward.cu
+//
+// DESCRIPTION:
+//   Copies sequences from the input jagged tensor into the output tensor
+//   according to the indices tensor. Uses a group-strided outer loop over
+//   dense output rows, a per-group binary search (broadcast from lane 0) to
+//   locate the source sequence, and a work-group-strided inner loop to copy
+//   columns.
+//
+////////////////////////////////////////////////////////////////////////////////
 template <typename scalar_t, typename index_t, typename offset_t>
 void JaggedIndexSelect2dKernel<scalar_t, index_t, offset_t>::operator()(
     sycl::nd_item<1> item) const {
@@ -88,6 +120,21 @@ void JaggedIndexSelect2dKernel<scalar_t, index_t, offset_t>::operator()(
 // ============================================================================
 // Host Function - XPU Implementation
 // ============================================================================
+
+////////////////////////////////////////////////////////////////////////////////
+// jagged_index_select_2d_forward_xpu - Host Function
+////////////////////////////////////////////////////////////////////////////////
+//
+// CUDA SOURCE MAPPING:
+//   CUDA Function: jagged_index_select_2d_forward_cuda
+//   CUDA File: fbgemm_gpu/src/jagged_tensor_ops/jagged_index_select_2d_forward.cu
+//
+// DESCRIPTION:
+//   Validates inputs, allocates the dense output tensor, and dispatches the
+//   templated JaggedIndexSelect2dKernel over floating scalar types and index
+//   types. Launches at most 65535 work-groups of 256 items each.
+//
+////////////////////////////////////////////////////////////////////////////////
 at::Tensor jagged_index_select_2d_forward_xpu(
     const at::Tensor& values,
     const at::Tensor& indices,
@@ -115,8 +162,16 @@ at::Tensor jagged_index_select_2d_forward_xpu(
         return output;
     }
 
+    // The kernel indexes inputs as raw row-major buffers, so materialize
+    // contiguous copies for any non-contiguous input to match the CUDA
+    // reference (which uses PackedTensorAccessor and honors strides).
+    const auto values_contig = values.contiguous();
+    const auto indices_contig = indices.contiguous();
+    const auto input_offsets_contig = input_offsets.contiguous();
+    const auto output_offsets_contig = output_offsets.contiguous();
+
     // Kernel configuration
-    constexpr int64_t work_group_size = 256;
+    constexpr int64_t kWorkGroupSize = 256;
     int64_t num_groups =
         std::min(static_cast<int64_t>(65535), num_dense_output_rows);
     if (num_groups == 0) {
@@ -125,7 +180,7 @@ at::Tensor jagged_index_select_2d_forward_xpu(
 
     sycl::queue& queue = c10::xpu::getCurrentXPUStream().queue();
 
-    AT_DISPATCH_FLOATING_TYPES(
+    FBGEMM_DISPATCH_ALL_TYPES(
         values.scalar_type(), "jagged_index_select_2d_forward_xpu", [&] {
             AT_DISPATCH_INDEX_TYPES(
                 indices.scalar_type(),
@@ -137,14 +192,14 @@ at::Tensor jagged_index_select_2d_forward_xpu(
                         cgh.parallel_for<
                             JaggedIndexSelect2dKernel<scalar_t, index_t, offset_t>>(
                             sycl::nd_range<1>(
-                                sycl::range<1>(num_groups * work_group_size),
-                                sycl::range<1>(work_group_size)),
+                                sycl::range<1>(num_groups * kWorkGroupSize),
+                                sycl::range<1>(kWorkGroupSize)),
                             JaggedIndexSelect2dKernel<scalar_t, index_t, offset_t>(
                                 output.data_ptr<scalar_t>(),
-                                values.data_ptr<scalar_t>(),
-                                indices.data_ptr<index_t>(),
-                                input_offsets.data_ptr<offset_t>(),
-                                output_offsets.data_ptr<offset_t>(),
+                                values_contig.data_ptr<scalar_t>(),
+                                indices_contig.data_ptr<index_t>(),
+                                input_offsets_contig.data_ptr<offset_t>(),
+                                output_offsets_contig.data_ptr<offset_t>(),
                                 num_dense_output_rows,
                                 num_output_rows,
                                 num_cols));
