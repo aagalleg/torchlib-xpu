@@ -1,7 +1,7 @@
 From acc6ea1cba26cbf45f5a89ac25275a0920bd1b11 Mon Sep 17 00:00:00 2001
 From: Alberto Gallegos <alberto.gallegos.muro@intel.com>
 Date: Thu, 9 Jul 2026 18:28:28 +0000
-Subject: [PATCH] Add XPU support to FBGEMM sparse ops tests
+Subject: [PATCH] Add XPU support to FBGEMM sparse ops and jagged_index_select_2d tests
 
 Add XPU device support to misc_ops_test.py and permute_sparse_features_test.py.
 Includes support for permute_1D_sparse_data and permute_2D_sparse_data operators.
@@ -10,6 +10,10 @@ asynchronous_exclusive_cumsum, and asynchronous_inclusive_cumsum operators.
 Also adds XPU support to block_bucketize_test.py for the
 block_bucketize_sparse_features and block_bucketize_sparse_features_inference
 operators.
+
+Adds XPU support to jagged/jagged_index_select_2d_test.py for the
+jagged_index_select_2d_forward operator; the backward + opcheck sections are
+skipped on XPU because only the forward kernel has an XPU implementation.
 
 Add focused correctness tests for get_infos_metadata in
 split_embeddings_utils_test.py and generate_vbe_metadata_test.py. Import
@@ -34,7 +38,8 @@ Co-authored-by: Felipe Leza Alvarez <felipe.leza.alvarez@intel.com>
  .../tbe/utils/generate_vbe_metadata_test.py   |  23 ++-
  .../tbe/utils/split_embeddings_utils_test.py  |  33 +++-
  .../jagged/expand_into_jagged_permute_test.py |  29 ++--
- 8 files changed, 205 insertions(+), 106 deletions(-)
+ .../test/jagged/jagged_index_select_2d_test.py |  18 +++-
+ 9 files changed, 220 insertions(+), 109 deletions(-)
 
 diff --git a/fbgemm_gpu/test/sparse/misc_ops_test.py b/fbgemm_gpu/test/sparse/misc_ops_test.py
 index edb0d3615..2876ee209 100644
@@ -888,6 +893,63 @@ index e3eb1b52c..2259a6b18 100644
              )
  
      @unittest.skipIf(*gpu_unavailable)
+diff --git a/fbgemm_gpu/test/jagged/jagged_index_select_2d_test.py b/fbgemm_gpu/test/jagged/jagged_index_select_2d_test.py
+index 70b2ef276..16771feb4 100644
+--- a/fbgemm_gpu/test/jagged/jagged_index_select_2d_test.py
++++ b/fbgemm_gpu/test/jagged/jagged_index_select_2d_test.py
+@@ -17,6 +17,11 @@ from hypothesis import given, settings, Verbosity
+ 
+ from .common import additional_decorators, open_source
+ 
++# Registers the XPU (Intel GPU) FBGEMM operator implementations.
++import fbgemm_xpu  # noqa: F401, E402
++
++xpu_available: bool = torch.xpu.is_available()
++
+ if open_source:
+     # pyre-ignore[21]
+     from test_utils import optests, use_cpu_strategy
+@@ -33,7 +38,9 @@ class JaggedIndexSelect2DTest(unittest.TestCase):
+         inverse_lookup: torch.Tensor,
+         device: torch.device,
+     ) -> torch.Tensor:
+-        offsets = torch.ops.fbgemm.asynchronous_exclusive_cumsum(lengths)
++        # Portable exclusive cumsum so this reference works on every backend
++        # (fbgemm::asynchronous_exclusive_cumsum is not implemented on XPU).
++        offsets = lengths.cumsum(0) - lengths
+         end_offsets = offsets + lengths
+         full_start_offset = torch.index_select(offsets, 0, inverse_lookup)
+         full_end_offset = torch.index_select(end_offsets, 0, inverse_lookup)
+@@ -79,7 +86,7 @@ class JaggedIndexSelect2DTest(unittest.TestCase):
+         check_non_contiguous: bool,
+         known_shape: bool,
+     ) -> None:
+-        device = torch.device("cpu" if use_cpu else "cuda")
++        device = torch.device("cpu" if use_cpu else ("xpu" if xpu_available else "cuda"))
+         is_float = jagged_tensor_dtype in [torch.float, torch.half, torch.bfloat16]
+         lengths = torch.randint(
+             low=0,
+@@ -142,6 +149,11 @@ class JaggedIndexSelect2DTest(unittest.TestCase):
+         if not is_float:
+             return
+ 
++        # Backward and opcheck are not supported on XPU yet: only the forward
++        # kernel of jagged_index_select_2d has an XPU implementation.
++        if device.type == "xpu":
++            return
++
+         grad = torch.rand_like(output)
+         grad_ref = grad.detach().clone()
+ 
+@@ -206,7 +218,7 @@ class JaggedIndexSelect2DTest(unittest.TestCase):
+         jagged_tensor_dtype: torch.dtype,
+         use_cpu: bool,
+     ) -> None:
+-        device = torch.device("cpu" if use_cpu else "cuda")
++        device = torch.device("cpu" if use_cpu else ("xpu" if xpu_available else "cuda"))
+         is_float = jagged_tensor_dtype in [torch.float, torch.half, torch.bfloat16]
+         lengths = torch.randint(
+             low=0,
 -- 
 2.43.0
 
