@@ -311,7 +311,7 @@ jobs:
         pytest -rsf -k "${known_failures}" test/
 
   test-fbgemm:
-    needs: [ build-fbgemm, identify-changes ]
+    needs: [ build, identify-changes ]
     if: needs.identify-changes.outputs.fbgemm-xpu == 'true'
     strategy:
       matrix:
