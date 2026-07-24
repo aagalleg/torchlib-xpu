@@ -323,7 +323,7 @@ jobs:
       image: 'ubuntu:24.04'
       options: --device /dev/dri:/dev/dri -v /dev/dri/by-path:/dev/dri/by-path
     env:
-      WHEELS: fbgemm-xpu-${{ matrix.python-version }}-wheels
+      WHEELS: torchlib-${{ matrix.python-version }}-wheels
     defaults:
       run:
         shell: bash -l {0}  # for conda environment activation
