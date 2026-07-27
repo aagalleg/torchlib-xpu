@@ -411,6 +411,15 @@ TORCH_LIBRARY_FRAGMENT(fbgemm, m) {
             ") -> Tensor");
     }
 
+    if (!schemaExists("fbgemm::jagged_to_padded_dense_backward")) {
+        m.def(
+            "jagged_to_padded_dense_backward("
+            "    Tensor grad_output, "
+            "    Tensor[] offsets, "
+            "    SymInt total_L"
+            ") -> Tensor");
+    }
+
     if (!schemaExists("fbgemm::jagged_dense_elementwise_add_jagged_output")) {
         m.def(
             "jagged_dense_elementwise_add_jagged_output("
