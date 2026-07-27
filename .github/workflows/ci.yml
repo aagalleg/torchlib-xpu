@@ -310,8 +310,95 @@ jobs:
         fi
         pytest -rsf -k "${known_failures}" test/
 
+  test-fbgemm:
+    needs: [ build, identify-changes ]
+    if: needs.identify-changes.outputs.fbgemm-xpu == 'true'
+    strategy:
+      matrix:
+        # Testing in minimum and maximum supported versions of python.
+        python-version: [ '3.10', '3.14' ]
+        runner: [ 'bmg' ]
+    runs-on: ${{matrix.runner}}
+    container:
+      image: 'ubuntu:24.04'
+      options: --device /dev/dri:/dev/dri -v /dev/dri/by-path:/dev/dri/by-path
+    env:
+      WHEELS: torchlib-${{ matrix.python-version }}-wheels
+    defaults:
+      run:
+        shell: bash -l {0}  # for conda environment activation
+    steps:
+    - name: 'Install prerequisites'
+      run: |
+        apt-get update
+        apt-get install -y \
+          ca-certificates \
+          curl \
+          git \
+          gpg \
+          software-properties-common \
+          wget
+        git config --global user.email "nobody@intel.com"
+        git config --global user.name "Nobody"
+    - name: 'Download wheels'
+      uses: actions/download-artifact@v8
+      with:
+        name: ${{ env.WHEELS }}-${{ env.PR_OR_SHA }}-${{ env.UNIQUE_ID }}
+        path: _wheels/
+    - name: 'Checkout'
+      uses: actions/checkout@v7
+      with:
+        path: torchlib-xpu
+    - name: 'Checkout'
+      uses: actions/checkout@v7
+      with:
+        repository: pytorch/FBGEMM
+        ref: v1.8.0
+        path: fbgemm
+    - name: 'Setup Conda'
+      uses: conda-incubator/setup-miniconda@v4
+      with:
+        # conda configuration
+        auto-update-conda: false
+        channels: conda-forge
+        channel-priority: strict
+        conda-remove-defaults: true
+        miniforge-version: latest
+        use-mamba: true
+        # environment configuration
+        activate-environment: test-env
+        python-version: ${{ matrix.python-version }}
+    - name: 'Install Intel drivers'
+      run: |
+        add-apt-repository -y ppa:kobuk-team/intel-graphics
+        apt-get install -y \
+          libze1 \
+          libze-intel-gpu1 \
+          intel-ocloc
+    - name: 'Install pip'
+      run: |
+        conda install pip
+    - name: 'Install fbgemm-xpu'
+      run: |
+        pip install \
+          "$(ls ./_wheels/${{ env.WHEELS }}-${{ env.PR_OR_SHA }}-${{ env.UNIQUE_ID }}/fbgemm_xpu*.whl)[test]" \
+          --extra-index-url https://download.pytorch.org/whl/xpu
+    - name: 'Test gpu'
+      run: |
+        python -c "import torch; print(torch.xpu.is_available())" 
+    - name: 'Patch FBGEMM'
+      working-directory: fbgemm
+      run: |
+        # TODO: Apply XPU patches here
+        echo "Patches will be applied here"
+    - name: 'Test fbgemm-xpu'
+      working-directory: fbgemm
+      run: |
+        # TODO: Run pytest commands to run the XPU tests here
+        echo "Instructions to run the tests will be added here"
+
   publish:
-    needs: [ compose, test-torchcodec ]
+    needs: [ compose, test-torchcodec, test-fbgemm ]
     if: ${{ !(failure() || cancelled()) }}
     runs-on: ubuntu-24.04
     permissions:
