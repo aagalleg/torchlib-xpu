@@ -14,6 +14,20 @@ Adds XPU support to jagged/jagged_index_select_2d_test.py for the
 jagged_index_select_2d_forward operator; the backward + opcheck sections are
 skipped on XPU because only the forward kernel has an XPU implementation.
 
+Adds XPU support to the jagged tensor operator tests so the SYCL/XPU
+implementations are exercised against FBGEMM's reference results:
+
+- jagged/2d_to_dense_test.py: jagged_2d_to_dense (forward + truncation cases).
+- jagged/dense_to_jagged_test.py: dense_to_jagged / dense_to_jagged_forward
+  round-trip.
+- jagged/jagged_to_padded_dense_test.py: jagged_to_padded_dense[_forward].
+- jagged/elementwise_binary_test.py:
+  jagged_dense_elementwise_add_jagged_output (the plain add / mul variants stay
+  CPU/CUDA only).
+
+These jagged ops implement both forward and backward, so their backward,
+gradcheck and opcheck sections run on XPU as they do on CPU/CUDA.
+
 Signed-off-by: Alberto Gallegos <alberto.gallegos.muro@intel.com>
 Co-authored-by: Felipe Leza Alvarez <felipe.leza.alvarez@intel.com>
 ---
@@ -23,7 +37,11 @@ Co-authored-by: Felipe Leza Alvarez <felipe.leza.alvarez@intel.com>
  fbgemm_gpu/test/sparse/misc_ops_test.py            |  18 ++++++--
  .../test/sparse/permute_sparse_features_test.py    |  49 +++++++++++----------
  fbgemm_gpu/test/sparse/reorder_batched_test.py     |  34 +++++++++++++++-------
- 6 files changed, 164 insertions(+), 117 deletions(-)
+ fbgemm_gpu/test/jagged/2d_to_dense_test.py    | 43 +++++++++++++++++++
+ .../test/jagged/dense_to_jagged_test.py       |  9 +++-
+ .../test/jagged/elementwise_binary_test.py    | 14 +++++-
+ .../jagged/jagged_to_padded_dense_test.py     |  7 ++-
+ 10 files changed, 234 insertions(+), 120 deletions(-)
 
 diff --git a/fbgemm_gpu/test/sparse/misc_ops_test.py b/fbgemm_gpu/test/sparse/misc_ops_test.py
 index f3371677e..73a1641e8 100644
@@ -896,5 +914,165 @@ index 70b2ef276..16771feb4 100644
          is_float = jagged_tensor_dtype in [torch.float, torch.half, torch.bfloat16]
          lengths = torch.randint(
              low=0,
+diff --git a/fbgemm_gpu/test/jagged/2d_to_dense_test.py b/fbgemm_gpu/test/jagged/2d_to_dense_test.py
+index 3370a37..63613a1 100644
+--- a/fbgemm_gpu/test/jagged/2d_to_dense_test.py
++++ b/fbgemm_gpu/test/jagged/2d_to_dense_test.py
+@@ -24,6 +24,11 @@ if open_source:
+ else:
+     from fbgemm_gpu.test.test_utils import cpu_and_maybe_gpu, gpu_unavailable, optests
+ 
++# Registers the XPU (Intel GPU) FBGEMM operator implementations.
++import fbgemm_xpu  # noqa: F401, E402
++
++xpu_available: bool = torch.xpu.is_available()
++
+ 
+ @optests.generate_opcheck_tests(additional_decorators=additional_decorators)
+ class Jagged2DToDenseTest(unittest.TestCase):
+@@ -69,6 +74,26 @@ class Jagged2DToDenseTest(unittest.TestCase):
+         )
+         torch.testing.assert_close(ref_output_values, output_values)
+ 
++        if xpu_available:
++            # test xpu forward
++            xpu_values = (
++                ref_values.clone().to(dtype).xpu().detach().requires_grad_(True)
++            )
++            xpu_offsets = offsets.xpu()
++            xpu_ref_output_values = ref_output_values.xpu()
++            xpu_output_values = torch.ops.fbgemm.jagged_2d_to_dense(
++                values=xpu_values,
++                offsets=xpu_offsets,
++                max_sequence_length=max_sequence_length,
++            )
++            torch.testing.assert_close(xpu_ref_output_values, xpu_output_values)
++
++            # test xpu backward
++            xpu_output_values.backward(xpu_ref_output_values)
++            torch.testing.assert_close(
++                ref_values.to(dtype).xpu(), xpu_values.grad
++            )
++
+         if torch.cuda.is_available():
+             # test gpu forward
+             ref_values = ref_values.cuda()
+@@ -113,6 +138,24 @@ class Jagged2DToDenseTest(unittest.TestCase):
+         )
+         torch.testing.assert_close(ref_output_values, output_values)
+ 
++        if xpu_available:
++            # test xpu forward
++            xpu_values = ref_values.clone().xpu().detach().requires_grad_(True)
++            xpu_offsets = offsets.xpu()
++            xpu_ref_output_values = ref_output_values.xpu()
++            xpu_output_values = torch.ops.fbgemm.jagged_2d_to_dense(
++                values=xpu_values,
++                offsets=xpu_offsets,
++                max_sequence_length=max_sequence_length,
++            )
++            torch.testing.assert_close(xpu_ref_output_values, xpu_output_values)
++
++            # test xpu backward
++            xpu_expected_grad = ref_values.clone()
++            xpu_expected_grad[4, :] = 0  # due to truncation
++            xpu_output_values.backward(xpu_ref_output_values)
++            torch.testing.assert_close(xpu_expected_grad.xpu(), xpu_values.grad)
++
+         if torch.cuda.is_available():
+             # test gpu forward
+             ref_values = ref_values.cuda()
+diff --git a/fbgemm_gpu/test/jagged/dense_to_jagged_test.py b/fbgemm_gpu/test/jagged/dense_to_jagged_test.py
+index 5048d71..55947c2 100644
+--- a/fbgemm_gpu/test/jagged/dense_to_jagged_test.py
++++ b/fbgemm_gpu/test/jagged/dense_to_jagged_test.py
+@@ -28,6 +28,11 @@ else:
+         optests,
+     )
+ 
++# Registers the XPU (Intel GPU) FBGEMM operator implementations.
++import fbgemm_xpu  # noqa: F401, E402
++
++xpu_available: bool = torch.xpu.is_available()
++
+ 
+ @optests.generate_opcheck_tests(additional_decorators=additional_decorators)
+ class DenseToJaggedTest(unittest.TestCase):
+@@ -85,7 +90,9 @@ class DenseToJaggedTest(unittest.TestCase):
+         outer_dense_size=st.integers(0, 5),
+         inner_dense_size=st.integers(0, 5),
+         dtype=st.sampled_from([torch.float, torch.half, torch.bfloat16]),
+-        device=cpu_and_maybe_gpu(),
++        device=st.sampled_from(
++            [torch.device("cpu")] + ([torch.device("xpu")] if xpu_available else [])
++        ),
+         precompute_total_L=st.booleans(),
+     )
+     @settings(verbosity=Verbosity.verbose, max_examples=20, deadline=None)
+diff --git a/fbgemm_gpu/test/jagged/elementwise_binary_test.py b/fbgemm_gpu/test/jagged/elementwise_binary_test.py
+index 2a9b493..c107e11 100644
+--- a/fbgemm_gpu/test/jagged/elementwise_binary_test.py
++++ b/fbgemm_gpu/test/jagged/elementwise_binary_test.py
+@@ -34,6 +34,11 @@ else:
+         optests,
+     )
+ 
++# Registers the XPU (Intel GPU) FBGEMM operator implementations.
++import fbgemm_xpu  # noqa: F401, E402
++
++xpu_available: bool = torch.xpu.is_available()
++
+ 
+ @optests.generate_opcheck_tests(additional_decorators=additional_decorators)
+ class ElementwiseBinaryTest(unittest.TestCase):
+@@ -46,6 +51,11 @@ class ElementwiseBinaryTest(unittest.TestCase):
+         dtype: torch.dtype,
+         device: torch.device,
+     ) -> None:
++        # On XPU only jagged_dense_elementwise_add_jagged_output has an
++        # implementation; the plain add / mul variants are CPU/CUDA only.
++        if device.type == "xpu" and operation != "add_jagged_output":
++            return
++
+         x_values, x_offsets, max_lengths = generate_jagged_tensor(
+             num_jagged_dim, outer_dense_size, inner_dense_size, dtype, device
+         )
+@@ -131,7 +141,9 @@ class ElementwiseBinaryTest(unittest.TestCase):
+         inner_dense_size=st.integers(0, 4),
+         operation=st.sampled_from(["add", "add_jagged_output", "mul"]),
+         dtype=st.sampled_from([torch.float, torch.half, torch.bfloat16]),
+-        device=cpu_and_maybe_gpu(),
++        device=st.sampled_from(
++            [torch.device("cpu")] + ([torch.device("xpu")] if xpu_available else [])
++        ),
+     )
+     @settings(verbosity=Verbosity.verbose, max_examples=20, deadline=None)
+     def test_jagged_elementwise_binary(
+diff --git a/fbgemm_gpu/test/jagged/jagged_to_padded_dense_test.py b/fbgemm_gpu/test/jagged/jagged_to_padded_dense_test.py
+index 24a8567..2474fdc 100644
+--- a/fbgemm_gpu/test/jagged/jagged_to_padded_dense_test.py
++++ b/fbgemm_gpu/test/jagged/jagged_to_padded_dense_test.py
+@@ -28,6 +28,11 @@ if open_source:
+ else:
+     from fbgemm_gpu.test.test_utils import cpu_and_maybe_gpu, gradcheck, optests
+ 
++# Registers the XPU (Intel GPU) FBGEMM operator implementations.
++import fbgemm_xpu  # noqa: F401, E402
++
++xpu_available: bool = torch.xpu.is_available()
++
+ 
+ @optests.generate_opcheck_tests(additional_decorators=additional_decorators)
+ class JaggedToPaddedDenseTest(unittest.TestCase):
+@@ -38,7 +43,7 @@ class JaggedToPaddedDenseTest(unittest.TestCase):
+         fold_inner_dense=st.booleans(),
+         padding_value=st.sampled_from([0, -1e-8]),
+         dtype=st.sampled_from([torch.float, torch.half, torch.bfloat16]),
+-        device_type=cpu_and_maybe_gpu(),
++        device_type=st.sampled_from(["cpu"] + (["xpu"] if xpu_available else [])),
+     )
+     @settings(verbosity=Verbosity.verbose, max_examples=20, deadline=None)
+     def test_jagged_to_padded_dense(
 -- 
 2.43.0
+
