@@ -1,12 +1,16 @@
 From 1ff5ad5b0c0a780081a8d6f90748c9c9df08e26d Mon Sep 17 00:00:00 2001
 From: Alberto Gallegos <alberto.gallegos.muro@intel.com>
 Date: Thu, 9 Jul 2026 18:28:28 +0000
-Subject: [PATCH] Add XPU support to misc ops tests
+Subject: [PATCH] Add XPU support to FBGEMM sparse ops tests
+
+Add XPU device support to misc_ops_test.py and permute_sparse_features_test.py.
+Includes support for permute_1D_sparse_data and permute_2D_sparse_data operators.
 
 Signed-off-by: Alberto Gallegos <alberto.gallegos.muro@intel.com>
 ---
- fbgemm_gpu/test/sparse/misc_ops_test.py | 18 +++++++++++++++---
- 1 file changed, 15 insertions(+), 3 deletions(-)
+ fbgemm_gpu/test/sparse/misc_ops_test.py            | 18 ++++++++++++++----
+ .../test/sparse/permute_sparse_features_test.py    |  9 +++++++--
+ 2 files changed, 22 insertions(+), 5 deletions(-)
 
 diff --git a/fbgemm_gpu/test/sparse/misc_ops_test.py b/fbgemm_gpu/test/sparse/misc_ops_test.py
 index edb0d3615..f825ce27c 100644
@@ -87,6 +91,32 @@ index edb0d3615..f825ce27c 100644
      def test_lengths_range(self) -> None:
          # When 'output_shape' is None, the function will return a tensor with dynamic shape.
          with self.assertRaisesRegex(
+diff --git a/fbgemm_gpu/test/sparse/permute_sparse_features_test.py b/fbgemm_gpu/test/sparse/permute_sparse_features_test.py
+index d358f4b8f..a462d45ed 100644
+--- a/fbgemm_gpu/test/sparse/permute_sparse_features_test.py
++++ b/fbgemm_gpu/test/sparse/permute_sparse_features_test.py
+@@ -19,6 +19,9 @@ from hypothesis import given, settings
+ 
+ from .common import extend_test_class, open_source, permute_indices_ref_
+ 
++# Registers the XPU (Intel GPU) FBGEMM operator implementations.
++import fbgemm_xpu  # noqa: F401, E402
++
+ if open_source:
+     # pyre-ignore[21]
+     from test_utils import gpu_available, gpu_unavailable, on_oss_clang, running_in_oss
+@@ -203,8 +206,10 @@ class PermuteSparseFeaturesTest(unittest.TestCase):
+ 
+ 
+ class Permute1DSparseFeaturesTest(unittest.TestCase):
+-    @unittest.skipIf(*running_in_oss)
+-    @unittest.skipIf(*gpu_unavailable)
++    @unittest.skipIf(
++        gpu_unavailable[0] and not torch.xpu.is_available(),
++        "GPU and XPU not found",
++    )
+     @given(
+         T=st.integers(min_value=1, max_value=20),
+         L=st.integers(min_value=2, max_value=20),
 -- 
 2.43.0
-
