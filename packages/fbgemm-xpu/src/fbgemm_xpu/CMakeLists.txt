@@ -46,7 +46,6 @@ set(host_sources
     ${CMAKE_CURRENT_SOURCE_DIR}/sycl_kernels/invert_permute_kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sycl_kernels/permute_1d_sparse_data.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sparse_async_cumsum.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/asynchronous_complete_cumsum.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fbgemm_utils/utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sycl_kernels/permute_2d_sparse_data.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/permute_2d_sparse_data_op.cpp

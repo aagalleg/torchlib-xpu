@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-#include "asynchronous_complete_cumsum.h"
+#include "sparse_async_cumsum.h"
 #include "sycl_kernels/permute_2d_sparse_data.h"
 
 namespace fbgemm_xpu {
