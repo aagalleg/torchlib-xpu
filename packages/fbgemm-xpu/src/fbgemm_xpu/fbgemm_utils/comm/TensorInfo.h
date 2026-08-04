@@ -8,7 +8,11 @@
 #include <ATen/DimVector.h>
 #include <ATen/Dispatch.h>
 #include <ATen/Formatting.h>
+#if __has_include(<ATen/NamedTensor.h>)
 #include <ATen/NamedTensor.h>
+#elif __has_include(<ATen/core/NamedTensor.h>)
+#include <ATen/core/NamedTensor.h>
+#endif
 #include <ATen/ScalarOps.h>
 #include <ATen/Tensor.h>
 #include <ATen/TensorGeometry.h>
