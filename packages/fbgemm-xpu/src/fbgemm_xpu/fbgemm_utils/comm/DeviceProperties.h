@@ -7,7 +7,7 @@
  *
  * http://www.apache.org/licenses/LICENSE-2.0
  */
- 
+
 #pragma once
 
 #include <ATen/xpu/XPUContext.h>
