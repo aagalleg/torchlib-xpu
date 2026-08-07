@@ -10,39 +10,6 @@
 
 #pragma once
 
-#include <ATen/Context.h>
-#include <ATen/Device.h>
-#include <ATen/DeviceGuard.h>
-#include <ATen/DimVector.h>
-#include <ATen/Dispatch.h>
-#include <ATen/Formatting.h>
-#if __has_include(<ATen/NamedTensor.h>)
-#include <ATen/NamedTensor.h>
-#elif __has_include(<ATen/core/NamedTensor.h>)
-#include <ATen/core/NamedTensor.h>
-#endif
-#include <ATen/ScalarOps.h>
-#include <ATen/Tensor.h>
-#include <ATen/TensorGeometry.h>
-#include <ATen/TensorIndexing.h>
-#include <ATen/TensorOperators.h>
-#include <ATen/Version.h>
-#include <ATen/core/ATenGeneral.h>
-#include <ATen/core/Generator.h>
-#include <ATen/core/Reduction.h>
-#include <ATen/core/Scalar.h>
-#include <ATen/core/UnsafeFromTH.h>
-#include <ATen/core/ivalue.h>
-#include <ATen/core/jit_type.h>
-#include <ATen/native/xpu/sycl/IntegerDivider.h>
-
-#include <c10/core/Allocator.h>
-#include <c10/core/InferenceMode.h>
-#include <c10/core/Layout.h>
-#include <c10/core/Storage.h>
-#include <c10/core/TensorOptions.h>
-#include <c10/util/Exception.h>
-
 #include <ATen/CPUApplyUtils.h>
 
 namespace at {
@@ -176,18 +143,6 @@ struct IndexToOffset {
       linearId /= info.sizes[dim];
     }
     return offset + linearId * info.strides[0];
-  }
-};
-
-template <typename T, typename IndexType>
-struct IndexToOffset<T, IndexType, true> {
-  static constexpr bool STRICT_CONTIGUOUS = true;
-  static constexpr bool NON_STRICT_CONTIGUOUS = false;
-  static inline IndexType get(
-      IndexType linearId,
-      const TensorInfo<T, IndexType>& info,
-      bool strict_contiguous = true) {
-    return linearId;
   }
 };
 

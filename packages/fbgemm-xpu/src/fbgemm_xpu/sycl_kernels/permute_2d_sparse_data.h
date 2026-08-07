@@ -34,7 +34,6 @@
 
 #include <sycl/sycl.hpp>
 #include <ATen/ATen.h>
-#include <ATen/DeviceGuard.h>
 #include <ATen/native/xpu/sycl/KernelUtils.h>
 #include <ATen/native/xpu/sycl/ScanUtils.h>
 #include <torch/library.h>
