@@ -11,7 +11,7 @@
 // This file contains SYCL ports of FBGEMM 2D sparse data permutation kernels.
 //
 // ORIGINAL CUDA SOURCE:
-//   File: fbgemm_gpu/src/sparse_ops/sparse_permute_embeddings.cu
+//   File: fbgemm_gpu/src/sparse_ops/sparse_permute_2d.cu
 //
 // KERNEL MAPPING:
 //   permute_2D_lengths_kernel_ (SYCL)
