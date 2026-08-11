@@ -9,7 +9,7 @@
 using Tensor = at::Tensor;
 
 namespace fbgemm_xpu {
-  DLL_PUBLIC std::tuple<int32_t, uint32_t> adjust_info_B_num_bits(
+  std::tuple<int32_t, uint32_t> adjust_info_B_num_bits(
       int32_t B,
       int32_t T) {
     int32_t info_B_num_bits = kDefaultInfoBNumBits;

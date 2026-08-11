@@ -15,7 +15,6 @@
 #include <sycl/sycl.hpp>
 
 #include "comm/SYCLContext.h"
-#include "function_types.h"
 #include "dispatch_macros.h"
 
 namespace fbgemm_xpu {
