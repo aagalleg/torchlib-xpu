@@ -46,8 +46,6 @@ sycl_kernel_submit(
   q.submit(cgf);
 }
 
-
-// For SYCL free function
 template <auto* kptr, typename... Kargs>
 static inline void sycl_kernel_submit(
     int64_t global_range,
