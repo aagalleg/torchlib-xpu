@@ -74,17 +74,6 @@ struct SourceContext {
       _FBGEMM_TFILE_,                                \
       _FBGEMM_DSA_FILESRC_);
 
-#define FBGEMM_LAUNCH_KERNEL(KERNEL, GRID, BLOCK, SMEM, STREAM, ...)        \
-  ([&] {                                                                    \
-    constexpr auto context = SOURCE_CONTEXT_CURRENT(KERNEL);                \
-    auto& kernel = KERNEL;                                                  \
-                                                                            \
-    return fbgemm_gpu::utils::                                              \
-        KernelLauncher<false, _FKL_BLOCKING_, _FKL_TENSORCHECK_>(context)   \
-            .launch_kernel(kernel, GRID, BLOCK, SMEM, STREAM, __VA_ARGS__); \
-  }())
-
-
 #define PRIVATE_CASE_TYPE_CACHE(enum_type, type, ...) \
   case enum_type: {                                   \
     using cache_t = type;                             \
