@@ -5,10 +5,6 @@
  * Original Source: https://github.com/intel/torch-xpu-ops
  */
 
-#pragma once
-
-#include <comm/SYCLContext.h>
-
 namespace at {
 template <typename T>
 static inline TensorOptions map_options() {

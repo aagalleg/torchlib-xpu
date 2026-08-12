@@ -13,8 +13,10 @@
 #include <ATen/ATen.h>
 #include <c10/macros/Macros.h>
 #include <sycl/sycl.hpp>
+#include <comm/DeviceProperties.h>
+#include <comm/Runtime.h>
+#include <comm/SYCLHelpers.h>
 
-#include "comm/SYCLContext.h"
 #include "dispatch_macros.h"
 
 namespace fbgemm_xpu {
@@ -129,7 +131,7 @@ inline uint32_t xpu_calc_xblock_count_base(int num_items, int threads_per_block)
   // The number of threads can be as high as 2048 on some newer architectures,
   // but this is not portable.
   TORCH_CHECK(
-      threads_per_block <= syclDeviceMaxWorkGroupSize(),
+      threads_per_block <= xpu::sycl::syclDeviceMaxWorkGroupSize(),
       "Number of threads must be <=1024!");
   constexpr uint64_t max_blocks = 2147483647;
   const auto u_num_items = static_cast<uint64_t>(num_items);

@@ -5,6 +5,8 @@
  * Original Source: https://github.com/intel/torch-xpu-ops
  */
 
+// NOTE: DO NOT remove file. File required for compilation of fbgemm-xpu.
+
 #pragma once
 
 #include <comm/DeviceProperties.h>
