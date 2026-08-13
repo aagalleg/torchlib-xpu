@@ -13,9 +13,6 @@
 #include <ATen/ATen.h>
 #include <c10/macros/Macros.h>
 #include <sycl/sycl.hpp>
-#include <comm/DeviceProperties.h>
-#include <comm/Runtime.h>
-#include <comm/SYCLHelpers.h>
 
 #include "dispatch_macros.h"
 
@@ -130,8 +127,12 @@ using fint32 = union fint32 {
 inline uint32_t xpu_calc_xblock_count_base(int num_items, int threads_per_block) {
   // The number of threads can be as high as 2048 on some newer architectures,
   // but this is not portable.
+  const auto max_work_group_size = c10::xpu::getCurrentXPUStream()
+                                       .queue()
+                                       .get_device()
+                                       .get_info<sycl::info::device::max_work_group_size>();
   TORCH_CHECK(
-      threads_per_block <= xpu::sycl::syclDeviceMaxWorkGroupSize(),
+      static_cast<size_t>(threads_per_block) <= max_work_group_size,
       "Number of threads must be <=1024!");
   constexpr uint64_t max_blocks = 2147483647;
   const auto u_num_items = static_cast<uint64_t>(num_items);
