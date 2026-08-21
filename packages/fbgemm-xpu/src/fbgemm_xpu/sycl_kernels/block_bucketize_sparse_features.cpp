@@ -7,8 +7,12 @@
 /*
  * SYCL/XPU Implementation of block_bucketize_sparse_features
  *
- * SYCL/XPU implementation of block_bucketize_sparse_features,
- * block_bucketize_sparse_features_inference, and populate_bucketized_permute.
+ * Original upstream reference (CUDA):
+ * https://github.com/pytorch/FBGEMM/blob/main/fbgemm_gpu/src/sparse_ops/sparse_block_bucketize_features.cu
+ *
+ * This file is a SYCL/XPU adaptation of that implementation for
+ * block_bucketize_sparse_features, block_bucketize_sparse_features_inference,
+ * and populate_bucketized_permute.
  *
  * Design: one work-item per (b_t) row for both the count and scatter
  * phases. This avoids per-element atomics on new_lengths/new_offsets
