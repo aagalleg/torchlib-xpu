@@ -43,7 +43,7 @@ index edb0d3615..c7039c096 100644
 +# Registers the XPU (Intel GPU) FBGEMM operator implementations.
 +import fbgemm_xpu  # noqa: F401, E402
 +
-+_ACCELERATOR = current_accelerator()
++ACCELERATOR = current_accelerator()
 +
  
  class MiscOpsTest(unittest.TestCase):
@@ -57,7 +57,7 @@ index edb0d3615..c7039c096 100644
 -            torch.testing.assert_close(inverse_permute_gpu.cpu(), inverse_permute_cpu)
 +        if accelerator_available:
 +            inverse_permute_accelerator = torch.ops.fbgemm.invert_permute(
-+                permute.to(_ACCELERATOR)
++                permute.to(ACCELERATOR)
 +            )
 +            torch.testing.assert_close(
 +                inverse_permute_accelerator.cpu(), inverse_permute_cpu
@@ -258,7 +258,7 @@ index ab89381fd..dbd82a12d 100644
 +# Registers the XPU (Intel GPU) FBGEMM operator implementations.
 +import fbgemm_xpu  # noqa: F401, E402
 +
-+_ACCELERATOR = current_accelerator()
++ACCELERATOR = current_accelerator()
 +
  
  def unbucketize_indices_value(
@@ -278,12 +278,12 @@ index ab89381fd..dbd82a12d 100644
              ) = torch.ops.fbgemm.block_bucketize_sparse_features(
 -                lengths.cuda(),
 -                indices.cuda(),
-+                lengths.to(_ACCELERATOR),
-+                indices.to(_ACCELERATOR),
++                lengths.to(ACCELERATOR),
++                indices.to(ACCELERATOR),
                  bucketize_pos,
                  sequence,
 -                block_sizes.cuda(),
-+                block_sizes.to(_ACCELERATOR),
++                block_sizes.to(ACCELERATOR),
                  my_size,
                  None,
                  keep_orig_idx=keep_orig_idx,
@@ -302,18 +302,18 @@ index ab89381fd..dbd82a12d 100644
          ) = torch.ops.fbgemm.block_bucketize_sparse_features(
 -            lengths.cuda() if not use_cpu else lengths,
 -            indices.cuda() if not use_cpu else indices,
-+            lengths.to(_ACCELERATOR) if not use_cpu else lengths,
-+            indices.to(_ACCELERATOR) if not use_cpu else indices,
++            lengths.to(ACCELERATOR) if not use_cpu else lengths,
++            indices.to(ACCELERATOR) if not use_cpu else indices,
              bucketize_pos,
              sequence,
 -            block_sizes.cuda() if not use_cpu else block_sizes,
-+            block_sizes.to(_ACCELERATOR) if not use_cpu else block_sizes,
++            block_sizes.to(ACCELERATOR) if not use_cpu else block_sizes,
              my_size,
              None,
              keep_orig_idx=keep_orig_idx,
              keep_orig_idx_per_feature=(
 -                keep_orig_idx_per_feature.cuda()
-+                keep_orig_idx_per_feature.to(_ACCELERATOR)
++                keep_orig_idx_per_feature.to(ACCELERATOR)
                  if not use_cpu
                  else keep_orig_idx_per_feature
              ),
@@ -332,23 +332,23 @@ index ab89381fd..dbd82a12d 100644
          ) = torch.ops.fbgemm.block_bucketize_sparse_features(
 -            lengths.cuda() if not use_cpu else lengths,
 -            indices.cuda() if not use_cpu else indices,
-+            lengths.to(_ACCELERATOR) if not use_cpu else lengths,
-+            indices.to(_ACCELERATOR) if not use_cpu else indices,
++            lengths.to(ACCELERATOR) if not use_cpu else lengths,
++            indices.to(ACCELERATOR) if not use_cpu else indices,
              None,
              sequence,
 -            block_sizes.cuda() if not use_cpu else block_sizes,
-+            block_sizes.to(_ACCELERATOR) if not use_cpu else block_sizes,
++            block_sizes.to(ACCELERATOR) if not use_cpu else block_sizes,
              my_size,
              block_bucketize_pos=(
 -                ([t.cuda() for t in block_bucketize_pos])
-+                ([t.to(_ACCELERATOR) for t in block_bucketize_pos])
++                ([t.to(ACCELERATOR) for t in block_bucketize_pos])
                  if not use_cpu
                  else block_bucketize_pos
              ),
              keep_orig_idx=keep_orig_idx,
              total_num_blocks=(
 -                total_num_blocks.cuda() if not use_cpu else total_num_blocks
-+                total_num_blocks.to(_ACCELERATOR) if not use_cpu else total_num_blocks
++                total_num_blocks.to(ACCELERATOR) if not use_cpu else total_num_blocks
              ),
          )
  
@@ -367,23 +367,23 @@ index ab89381fd..dbd82a12d 100644
          ) = torch.ops.fbgemm.block_bucketize_sparse_features(
 -            lengths.cuda() if not use_cpu else lengths,
 -            indices.cuda() if not use_cpu else indices,
-+            lengths.to(_ACCELERATOR) if not use_cpu else lengths,
-+            indices.to(_ACCELERATOR) if not use_cpu else indices,
++            lengths.to(ACCELERATOR) if not use_cpu else lengths,
++            indices.to(ACCELERATOR) if not use_cpu else indices,
              None,
              sequence,
 -            block_sizes.cuda() if not use_cpu else block_sizes,
-+            block_sizes.to(_ACCELERATOR) if not use_cpu else block_sizes,
++            block_sizes.to(ACCELERATOR) if not use_cpu else block_sizes,
              my_size,
              block_bucketize_pos=(
 -                ([t.cuda() for t in block_bucketize_pos])
-+                ([t.to(_ACCELERATOR) for t in block_bucketize_pos])
++                ([t.to(ACCELERATOR) for t in block_bucketize_pos])
                  if not use_cpu
                  else block_bucketize_pos
              ),
              keep_orig_idx=keep_orig_idx,
              total_num_blocks=(
 -                total_num_blocks.cuda() if not use_cpu else total_num_blocks
-+                total_num_blocks.to(_ACCELERATOR) if not use_cpu else total_num_blocks
++                total_num_blocks.to(ACCELERATOR) if not use_cpu else total_num_blocks
              ),
          )
  
@@ -402,17 +402,17 @@ index ab89381fd..dbd82a12d 100644
          ) = torch.ops.fbgemm.block_bucketize_sparse_features(
 -            lengths.cuda() if not use_cpu else lengths,
 -            indices.cuda() if not use_cpu else indices,
-+            lengths.to(_ACCELERATOR) if not use_cpu else lengths,
-+            indices.to(_ACCELERATOR) if not use_cpu else indices,
++            lengths.to(ACCELERATOR) if not use_cpu else lengths,
++            indices.to(ACCELERATOR) if not use_cpu else indices,
              None,
              sequence,
 -            block_sizes.cuda() if not use_cpu else block_sizes,
-+            block_sizes.to(_ACCELERATOR) if not use_cpu else block_sizes,
++            block_sizes.to(ACCELERATOR) if not use_cpu else block_sizes,
              my_size,
              keep_orig_idx=keep_orig_idx,
              total_num_blocks=(
 -                total_num_blocks.cuda() if not use_cpu else total_num_blocks
-+                total_num_blocks.to(_ACCELERATOR) if not use_cpu else total_num_blocks
++                total_num_blocks.to(ACCELERATOR) if not use_cpu else total_num_blocks
              ),
          )
  
@@ -431,17 +431,17 @@ index ab89381fd..dbd82a12d 100644
          ) = torch.ops.fbgemm.block_bucketize_sparse_features(
 -            lengths.cuda() if not use_cpu else lengths,
 -            indices.cuda() if not use_cpu else indices,
-+            lengths.to(_ACCELERATOR) if not use_cpu else lengths,
-+            indices.to(_ACCELERATOR) if not use_cpu else indices,
++            lengths.to(ACCELERATOR) if not use_cpu else lengths,
++            indices.to(ACCELERATOR) if not use_cpu else indices,
              None,
              sequence,
 -            block_sizes.cuda() if not use_cpu else block_sizes,
-+            block_sizes.to(_ACCELERATOR) if not use_cpu else block_sizes,
++            block_sizes.to(ACCELERATOR) if not use_cpu else block_sizes,
              my_size,
              keep_orig_idx=keep_orig_idx,
              total_num_blocks=(
 -                total_num_blocks.cuda() if not use_cpu else total_num_blocks
-+                total_num_blocks.to(_ACCELERATOR) if not use_cpu else total_num_blocks
++                total_num_blocks.to(ACCELERATOR) if not use_cpu else total_num_blocks
              ),
          )
  
@@ -460,16 +460,16 @@ index ab89381fd..dbd82a12d 100644
              ) = torch.ops.fbgemm.block_bucketize_sparse_features(
 -                lengths.cuda(),
 -                indices.cuda(),
-+                lengths.to(_ACCELERATOR),
-+                indices.to(_ACCELERATOR),
++                lengths.to(ACCELERATOR),
++                indices.to(ACCELERATOR),
                  bucketize_pos,
                  sequence,
 -                block_sizes.cuda(),
-+                block_sizes.to(_ACCELERATOR),
++                block_sizes.to(ACCELERATOR),
                  my_size,
                  # pyre-fixme[16]: `Optional` has no attribute `cuda`.
 -                weights.cuda() if has_weight else None,
-+                weights.to(_ACCELERATOR) if has_weight else None,
++                weights.to(ACCELERATOR) if has_weight else None,
              )
              torch.testing.assert_close(
                  new_lengths_gpu.cpu(), new_lengths_ref, rtol=0, atol=0
@@ -488,12 +488,12 @@ index ab89381fd..dbd82a12d 100644
              ) = torch.ops.fbgemm.block_bucketize_sparse_features_inference(
 -                lengths.cuda(),
 -                indices.cuda(),
-+                lengths.to(_ACCELERATOR),
-+                indices.to(_ACCELERATOR),
++                lengths.to(ACCELERATOR),
++                indices.to(ACCELERATOR),
                  False,
                  True,
 -                block_sizes.cuda(),
-+                block_sizes.to(_ACCELERATOR),
++                block_sizes.to(ACCELERATOR),
                  my_size,
                  None,
                  return_bucket_mapping=True,
@@ -512,12 +512,12 @@ index ab89381fd..dbd82a12d 100644
              ) = torch.ops.fbgemm.block_bucketize_sparse_features_inference(
 -                lengths.cuda(),
 -                indices.cuda(),
-+                lengths.to(_ACCELERATOR),
-+                indices.to(_ACCELERATOR),
++                lengths.to(ACCELERATOR),
++                indices.to(ACCELERATOR),
                  False,
                  True,
 -                block_sizes.cuda(),
-+                block_sizes.to(_ACCELERATOR),
++                block_sizes.to(ACCELERATOR),
                  my_size,
                  None,
                  return_bucket_mapping=True,
@@ -526,7 +526,7 @@ index ab89381fd..dbd82a12d 100644
              unbucketize_permute_populated_gpu = (
                  torch.ops.fbgemm.populate_bucketized_permute(
 -                    lengths.cuda(),
-+                    lengths.to(_ACCELERATOR),
++                    lengths.to(ACCELERATOR),
                      new_lengths_gpu,
                      bucket_mapping_gpu,
                  )
@@ -545,12 +545,12 @@ index ab89381fd..dbd82a12d 100644
              ) = torch.ops.fbgemm.block_bucketize_sparse_features_inference(
 -                lengths.cuda(),
 -                indices.cuda(),
-+                lengths.to(_ACCELERATOR),
-+                indices.to(_ACCELERATOR),
++                lengths.to(ACCELERATOR),
++                indices.to(ACCELERATOR),
                  False,
                  True,
 -                block_sizes.cuda(),
-+                block_sizes.to(_ACCELERATOR),
++                block_sizes.to(ACCELERATOR),
                  my_size,
                  None,
                  return_bucket_mapping=True,
@@ -559,7 +559,7 @@ index ab89381fd..dbd82a12d 100644
              unbucketize_permute_populated_gpu = (
                  torch.ops.fbgemm.populate_bucketized_permute(
 -                    lengths.cuda(),
-+                    lengths.to(_ACCELERATOR),
++                    lengths.to(ACCELERATOR),
                      new_lengths_gpu,
                      bucket_mapping_gpu,
                  )
@@ -578,19 +578,19 @@ index ab89381fd..dbd82a12d 100644
              ) = torch.ops.fbgemm.block_bucketize_sparse_features_inference(
 -                lengths.cuda(),
 -                indices.cuda(),
-+                lengths.to(_ACCELERATOR),
-+                indices.to(_ACCELERATOR),
++                lengths.to(ACCELERATOR),
++                indices.to(ACCELERATOR),
                  False,
                  True,
 -                block_sizes.cuda(),
-+                block_sizes.to(_ACCELERATOR),
++                block_sizes.to(ACCELERATOR),
                  my_size,
                  None,
                  return_bucket_mapping=True,
              )
              permute_gpu = torch.ops.fbgemm.populate_bucketized_permute(
 -                lengths.cuda(),
-+                lengths.to(_ACCELERATOR),
++                lengths.to(ACCELERATOR),
                  new_lengths_gpu,
                  bucket_mapping_gpu,
              )
@@ -609,17 +609,17 @@ index ab89381fd..dbd82a12d 100644
              ) = torch.ops.fbgemm.block_bucketize_sparse_features(
 -                lengths.cuda(),
 -                indices.cuda(),
-+                lengths.to(_ACCELERATOR),
-+                indices.to(_ACCELERATOR),
++                lengths.to(ACCELERATOR),
++                indices.to(ACCELERATOR),
                  bucketize_pos,
                  sequence,
 -                block_sizes.cuda(),
-+                block_sizes.to(_ACCELERATOR),
++                block_sizes.to(ACCELERATOR),
                  my_size,
 -                weights.cuda() if weights is not None else None,
 -                batch_sizes.cuda(),
-+                weights.to(_ACCELERATOR) if weights is not None else None,
-+                batch_sizes.to(_ACCELERATOR),
++                weights.to(ACCELERATOR) if weights is not None else None,
++                batch_sizes.to(ACCELERATOR),
                  max_B,
              )
  
@@ -638,17 +638,17 @@ index ab89381fd..dbd82a12d 100644
              ) = torch.ops.fbgemm.block_bucketize_sparse_features(
 -                lengths.cuda(),
 -                indices.cuda(),
-+                lengths.to(_ACCELERATOR),
-+                indices.to(_ACCELERATOR),
++                lengths.to(ACCELERATOR),
++                indices.to(ACCELERATOR),
                  bucketize_pos,
                  sequence,
 -                block_sizes.cuda(),
-+                block_sizes.to(_ACCELERATOR),
++                block_sizes.to(ACCELERATOR),
                  my_size,
 -                weights.cuda() if weights is not None else None,
 -                batch_sizes.cuda(),
-+                weights.to(_ACCELERATOR) if weights is not None else None,
-+                batch_sizes.to(_ACCELERATOR),
++                weights.to(ACCELERATOR) if weights is not None else None,
++                batch_sizes.to(ACCELERATOR),
                  max_B,
                  block_bucketize_pos,
              )
@@ -667,16 +667,16 @@ index ab89381fd..dbd82a12d 100644
          ) = torch.ops.fbgemm.block_bucketize_sparse_features(
 -            lengths.cuda(),
 -            indices.cuda(),
-+            lengths.to(_ACCELERATOR),
-+            indices.to(_ACCELERATOR),
++            lengths.to(ACCELERATOR),
++            indices.to(ACCELERATOR),
              bucketize_pos,
              sequence,
 -            block_sizes.cuda(),
-+            block_sizes.to(_ACCELERATOR),
++            block_sizes.to(ACCELERATOR),
              my_size,
              # pyre-fixme[16]: `Optional` has no attribute `cuda`.
 -            weights.cuda() if has_weight else None,
-+            weights.to(_ACCELERATOR) if has_weight else None,
++            weights.to(ACCELERATOR) if has_weight else None,
          )
  
          if sequence:
@@ -695,15 +695,15 @@ index ab89381fd..dbd82a12d 100644
              ) = torch.ops.fbgemm.block_bucketize_sparse_features(
 -                lengths.cuda(),
 -                indices.cuda(),
-+                lengths.to(_ACCELERATOR),
-+                indices.to(_ACCELERATOR),
++                lengths.to(ACCELERATOR),
++                indices.to(ACCELERATOR),
                  bucketize_pos,
                  sequence,
 -                block_sizes.cuda(),
-+                block_sizes.to(_ACCELERATOR),
++                block_sizes.to(ACCELERATOR),
                  my_size,
 -                weights.cuda(),
-+                weights.to(_ACCELERATOR),
++                weights.to(ACCELERATOR),
              )
  
              torch.testing.assert_close(
