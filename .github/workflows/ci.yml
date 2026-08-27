@@ -418,6 +418,7 @@ jobs:
     - name: 'Test fbgemm-xpu'
       working-directory: fbgemm
       run: |
+        pytest -rsf fbgemm_gpu/test/jagged/jagged_index_select_2d_test.py
         pytest -rsf fbgemm_gpu/test/sparse/misc_ops_test.py
         pytest -rsf fbgemm_gpu/test/sparse/permute_sparse_features_test.py
         pytest -rsf fbgemm_gpu/test/sparse/cumsum_test.py
