@@ -39,6 +39,7 @@ operators alongside the operators above. You can find their exact signature in
 - `block_bucketize_sparse_features_inference`
 - `populate_bucketized_permute`
 - `get_infos_metadata`
+- `jagged_index_select_2d_forward`
 
 ## Supported hardware
 
