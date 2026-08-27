@@ -38,8 +38,8 @@ Co-authored-by: Felipe Leza Alvarez <felipe.leza.alvarez@intel.com>
  .../tbe/utils/generate_vbe_metadata_test.py   |  23 ++-
  .../tbe/utils/split_embeddings_utils_test.py  |  33 +++-
  .../jagged/expand_into_jagged_permute_test.py |  29 ++--
- .../test/jagged/jagged_index_select_2d_test.py |  18 +++-
- 9 files changed, 220 insertions(+), 109 deletions(-)
+ .../test/jagged/jagged_index_select_2d_test.py |  22 ++++++++++++++++--
+ 9 files changed, 222 insertions(+), 111 deletions(-)
 
 diff --git a/fbgemm_gpu/test/sparse/misc_ops_test.py b/fbgemm_gpu/test/sparse/misc_ops_test.py
 index edb0d3615..2876ee209 100644
@@ -894,42 +894,47 @@ index e3eb1b52c..2259a6b18 100644
  
      @unittest.skipIf(*gpu_unavailable)
 diff --git a/fbgemm_gpu/test/jagged/jagged_index_select_2d_test.py b/fbgemm_gpu/test/jagged/jagged_index_select_2d_test.py
-index 70b2ef276..16771feb4 100644
+index 70b2ef276..84a129fc7 100644
 --- a/fbgemm_gpu/test/jagged/jagged_index_select_2d_test.py
 +++ b/fbgemm_gpu/test/jagged/jagged_index_select_2d_test.py
-@@ -17,6 +17,11 @@ from hypothesis import given, settings, Verbosity
+@@ -19,10 +19,15 @@
  
- from .common import additional_decorators, open_source
+ if open_source:
+     # pyre-ignore[21]
+-    from test_utils import optests, use_cpu_strategy
++    from test_utils import accelerator_available, current_accelerator, optests
+ else:
+     from fbgemm_gpu.test.test_utils import optests, use_cpu_strategy
  
 +# Registers the XPU (Intel GPU) FBGEMM operator implementations.
 +import fbgemm_xpu  # noqa: F401, E402
 +
-+xpu_available: bool = torch.xpu.is_available()
++ACCELERATOR = current_accelerator()
 +
- if open_source:
-     # pyre-ignore[21]
-     from test_utils import optests, use_cpu_strategy
-@@ -33,7 +38,9 @@ class JaggedIndexSelect2DTest(unittest.TestCase):
-         inverse_lookup: torch.Tensor,
-         device: torch.device,
-     ) -> torch.Tensor:
--        offsets = torch.ops.fbgemm.asynchronous_exclusive_cumsum(lengths)
-+        # Portable exclusive cumsum so this reference works on every backend
-+        # (fbgemm::asynchronous_exclusive_cumsum is not implemented on XPU).
-+        offsets = lengths.cumsum(0) - lengths
-         end_offsets = offsets + lengths
-         full_start_offset = torch.index_select(offsets, 0, inverse_lookup)
-         full_end_offset = torch.index_select(end_offsets, 0, inverse_lookup)
-@@ -79,7 +86,7 @@ class JaggedIndexSelect2DTest(unittest.TestCase):
+ 
+ @optests.generate_opcheck_tests(additional_decorators=additional_decorators)
+ class JaggedIndexSelect2DTest(unittest.TestCase):
+@@ -62,7 +67,9 @@
+                 torch.long,
+             ]  # Disable torch.bfloat16 due to large error bound
+         ),
+-        use_cpu=use_cpu_strategy(),
++        # `use_cpu_strategy()` only checks CUDA, which would force CPU-only
++        # runs on XPU.
++        use_cpu=st.booleans() if accelerator_available else st.just(True),
+         check_non_contiguous=st.booleans(),
+         known_shape=st.booleans(),
+     )
+@@ -79,7 +86,7 @@
          check_non_contiguous: bool,
          known_shape: bool,
      ) -> None:
 -        device = torch.device("cpu" if use_cpu else "cuda")
-+        device = torch.device("xpu" if xpu_available else ("cpu" if use_cpu else "cuda"))
++        device = torch.device("cpu") if use_cpu else ACCELERATOR
          is_float = jagged_tensor_dtype in [torch.float, torch.half, torch.bfloat16]
          lengths = torch.randint(
              low=0,
-@@ -142,6 +149,11 @@ class JaggedIndexSelect2DTest(unittest.TestCase):
+@@ -142,6 +149,11 @@
          if not is_float:
              return
  
@@ -941,12 +946,21 @@ index 70b2ef276..16771feb4 100644
          grad = torch.rand_like(output)
          grad_ref = grad.detach().clone()
  
-@@ -206,7 +218,7 @@ class JaggedIndexSelect2DTest(unittest.TestCase):
+@@ -193,7 +205,7 @@
+                 torch.long,
+             ]  # Disable torch.bfloat16 due to large error bound
+         ),
+-        use_cpu=use_cpu_strategy(),
++        use_cpu=st.booleans() if accelerator_available else st.just(True),
+     )
+     @settings(max_examples=20, deadline=None)
+     def test_jagged_index_select_2d_in_inference(
+@@ -206,7 +218,7 @@
          jagged_tensor_dtype: torch.dtype,
          use_cpu: bool,
      ) -> None:
 -        device = torch.device("cpu" if use_cpu else "cuda")
-+        device = torch.device("xpu" if xpu_available else ("cpu" if use_cpu else "cuda"))
++        device = torch.device("cpu") if use_cpu else ACCELERATOR
          is_float = jagged_tensor_dtype in [torch.float, torch.half, torch.bfloat16]
          lengths = torch.randint(
              low=0,
