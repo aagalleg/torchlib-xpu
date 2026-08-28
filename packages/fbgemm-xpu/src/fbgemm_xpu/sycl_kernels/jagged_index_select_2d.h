@@ -55,7 +55,7 @@ namespace fbgemm_xpu {
 //   locate source sequences and block-strided copying for columns.
 //
 ////////////////////////////////////////////////////////////////////////////////
-template <typename scalar_t, typename index_t, typename offset_t>
+template <typename index_t, typename offset_t, typename scalar_t>
 class JaggedIndexSelect2dKernel {
 public:
     JaggedIndexSelect2dKernel(

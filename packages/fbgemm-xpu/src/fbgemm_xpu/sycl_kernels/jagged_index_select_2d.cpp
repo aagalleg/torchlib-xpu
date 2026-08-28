@@ -15,7 +15,7 @@
 //   File: fbgemm_gpu/src/jagged_tensor_ops/jagged_index_select_2d_forward.cu
 //
 // KERNEL MAPPING:
-//   JaggedIndexSelect2dKernel<scalar_t, index_t, offset_t>
+//   JaggedIndexSelect2dKernel<index_t, offset_t, scalar_t>
 //     → jagged_index_select_2d_kernel (CUDA)
 //
 // HOST FUNCTION MAPPING:
@@ -75,8 +75,8 @@ inline int binary_search_upper_bound(const T* data, int n, T target) {
 //   columns.
 //
 ////////////////////////////////////////////////////////////////////////////////
-template <typename scalar_t, typename index_t, typename offset_t>
-void JaggedIndexSelect2dKernel<scalar_t, index_t, offset_t>::operator()(
+template <typename index_t, typename offset_t, typename scalar_t>
+void JaggedIndexSelect2dKernel<index_t, offset_t, scalar_t>::operator()(
     sycl::nd_item<1> item) const {
     const int group_id = item.get_group(0);
     const int group_range = item.get_group_range(0);
@@ -190,11 +190,11 @@ at::Tensor jagged_index_select_2d_forward_xpu(
 
                     queue.submit([&](sycl::handler& cgh) {
                         cgh.parallel_for<
-                            JaggedIndexSelect2dKernel<scalar_t, index_t, offset_t>>(
+                            JaggedIndexSelect2dKernel<index_t, offset_t, scalar_t>>(
                             sycl::nd_range<1>(
                                 sycl::range<1>(num_groups * kWorkGroupSize),
                                 sycl::range<1>(kWorkGroupSize)),
-                            JaggedIndexSelect2dKernel<scalar_t, index_t, offset_t>(
+                            JaggedIndexSelect2dKernel<index_t, offset_t, scalar_t>(
                                 output.data_ptr<scalar_t>(),
                                 values_contig.data_ptr<scalar_t>(),
                                 indices_contig.data_ptr<index_t>(),
