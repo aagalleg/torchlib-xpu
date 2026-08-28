@@ -22,10 +22,10 @@ and behavior match [FBGEMM].
 * Implemented [FBGEMM sparse operators][fbgemm-sparse-ops]:
 
   - [`asynchronous_complete_cumsum`][op-asynchronous_complete_cumsum]
-  - [`permute_1D_sparse_data`][op-permute_1D_sparse_data]
-  - [`permute_2D_sparse_data`][op-permute_2D_sparse_data]
   - [`block_bucketize_sparse_features`][op-block_bucketize_sparse_features]
   - [`expand_into_jagged_permute`][op-expand_into_jagged_permute]
+  - [`permute_1D_sparse_data`][op-permute_1D_sparse_data]
+  - [`permute_2D_sparse_data`][op-permute_2D_sparse_data]
 
 The following operators are also implemented but do not constitute
 public documented FBGEMM API. These are extra variants, helpers, or utility
@@ -34,11 +34,12 @@ operators alongside the operators above. You can find their exact signature in
 
 - `asynchronous_exclusive_cumsum`
 - `asynchronous_inclusive_cumsum`
-- `invert_permute`
-- `permute_2D_sparse_preallocated_out`
 - `block_bucketize_sparse_features_inference`
-- `populate_bucketized_permute`
 - `get_infos_metadata`
+- `invert_permute`
+- `jagged_index_select_2d_forward`
+- `permute_2D_sparse_preallocated_out`
+- `populate_bucketized_permute`
 
 ## Supported hardware
 

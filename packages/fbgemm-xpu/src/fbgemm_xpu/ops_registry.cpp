@@ -55,6 +55,17 @@ TORCH_LIBRARY_FRAGMENT(fbgemm, m)
         );
     }
 
+    if (!utils::torch::schemaExists("fbgemm::jagged_index_select_2d_forward")) {
+        m.def(
+            "jagged_index_select_2d_forward("
+            "    Tensor values, "
+            "    Tensor indices, "
+            "    Tensor input_offsets, "
+            "    Tensor output_offsets, "
+            "    int num_dense_output_rows"
+            ") -> Tensor"
+        );
+    }
 
     if (!utils::torch::schemaExists("fbgemm::permute_1D_sparse_data")) {
         m.def(
