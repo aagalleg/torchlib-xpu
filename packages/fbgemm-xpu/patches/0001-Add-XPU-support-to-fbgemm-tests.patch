@@ -1,4 +1,4 @@
-From 5f2cb5a44bac61d3035f5605debc4c6f229e546f Mon Sep 17 00:00:00 2001
+From acc6ea1cba26cbf45f5a89ac25275a0920bd1b11 Mon Sep 17 00:00:00 2001
 From: Alberto Gallegos <alberto.gallegos.muro@intel.com>
 Date: Thu, 9 Jul 2026 18:28:28 +0000
 Subject: [PATCH] Add XPU support to FBGEMM sparse ops tests
@@ -17,6 +17,10 @@ fbgemm_xpu to register the XPU implementation and compare accelerator dispatch
 results against the CPU implementation through the shared device-agnostic
 accelerator helpers.
 
+Enable expand_into_jagged_permute_test.py on the current accelerator using the
+shared accelerator_available/current_accelerator helpers and device-agnostic
+tensor transfers.
+
 Signed-off-by: Alberto Gallegos <alberto.gallegos.muro@intel.com>
 Signed-off-by: Felipe Leza Alvarez <felipe.leza.alvarez@intel.com>
 
@@ -29,7 +33,8 @@ Co-authored-by: Felipe Leza Alvarez <felipe.leza.alvarez@intel.com>
  .../test/sparse/block_bucketize_test.py       | 161 +++++++++---------
  .../tbe/utils/generate_vbe_metadata_test.py   |  23 ++-
  .../tbe/utils/split_embeddings_utils_test.py  |  33 +++-
- 7 files changed, 187 insertions(+), 95 deletions(-)
+ .../jagged/expand_into_jagged_permute_test.py |  29 ++--
+ 8 files changed, 205 insertions(+), 106 deletions(-)
 
 diff --git a/fbgemm_gpu/test/sparse/misc_ops_test.py b/fbgemm_gpu/test/sparse/misc_ops_test.py
 index edb0d3615..2876ee209 100644
@@ -823,6 +828,66 @@ index 5186ea1af..11f0cbbd8 100644
      def test_pickle(self) -> None:
          # pyre-ignore[16]
          tensor_queue = torch.classes.fbgemm.TensorQueue(torch.empty(0))
+diff --git a/fbgemm_gpu/test/jagged/expand_into_jagged_permute_test.py b/fbgemm_gpu/test/jagged/expand_into_jagged_permute_test.py
+index e3eb1b52c..2259a6b18 100644
+--- a/fbgemm_gpu/test/jagged/expand_into_jagged_permute_test.py
++++ b/fbgemm_gpu/test/jagged/expand_into_jagged_permute_test.py
+@@ -19,10 +19,14 @@ from hypothesis import given, settings, Verbosity
+ 
+ from .common import additional_decorators, open_source
+ 
++# Registers the XPU (Intel GPU) FBGEMM operator implementations.
++import fbgemm_xpu  # noqa: F401, E402
++
+ if open_source:
+     # pyre-ignore[21]
+     from test_utils import (
+-        gpu_available,
++        accelerator_available,
++        current_accelerator,
+         gpu_memory_lt_gb,
+         gpu_unavailable,
+         on_oss_clang,
+@@ -30,7 +34,8 @@ if open_source:
+     )
+ else:
+     from fbgemm_gpu.test.test_utils import (
+-        gpu_available,
++        accelerator_available,
++        current_accelerator,
+         gpu_memory_lt_gb,
+         gpu_unavailable,
+         on_oss_clang,
+@@ -97,18 +102,20 @@ class ExpandIntoJaggedPermuteTest(unittest.TestCase):
+         )
+         output_permute_ref_tensor = torch.tensor(output_permute_ref)
+ 
+-        # assert cpu and gpu ops
++        # Assert CPU and current-accelerator results.
+         torch.testing.assert_close(output_permute_cpu, output_permute_ref_tensor)
+-        if gpu_available:
+-            # gpu op
+-            output_permute_gpu = torch.ops.fbgemm.expand_into_jagged_permute(
+-                permute_tensor.cuda(),
+-                offsets_1d_tensor.cuda(),
+-                permuted_offsets_1d_tensor.cuda(),
+-                offsets_1d[-1],
++        if accelerator_available:
++            device = current_accelerator()
++            output_permute_accelerator = (
++                torch.ops.fbgemm.expand_into_jagged_permute(
++                    permute_tensor.to(device),
++                    offsets_1d_tensor.to(device),
++                    permuted_offsets_1d_tensor.to(device),
++                    offsets_1d[-1],
++                )
+             )
+             torch.testing.assert_close(
+-                output_permute_gpu.cpu(), output_permute_ref_tensor
++                output_permute_accelerator.cpu(), output_permute_ref_tensor
+             )
+ 
+     @unittest.skipIf(*gpu_unavailable)
 -- 
 2.43.0
 

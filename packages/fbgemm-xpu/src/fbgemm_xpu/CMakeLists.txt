@@ -46,6 +46,7 @@ set(host_sources
     ${CMAKE_CURRENT_SOURCE_DIR}/sparse_async_cumsum.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/split_embeddings_utils_xpu.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sycl_kernels/block_bucketize_sparse_features.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sycl_kernels/expand_into_jagged_permute_kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sycl_kernels/invert_permute_kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sycl_kernels/permute_1d_sparse_data.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sycl_kernels/permute_2d_sparse_data.cpp
