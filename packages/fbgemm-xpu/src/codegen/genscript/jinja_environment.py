@@ -9,14 +9,13 @@
 import argparse
 import os
 import re
-from typing import Dict, List, Optional, Tuple
 
 import jinja2
 
 try:
     from .scripts_argsparse import args
     from .torch_type_utils import TensorType
-except:
+except ImportError:
     # pyre-ignore[21]
     from scripts_argsparse import args
 
@@ -89,7 +88,7 @@ env.globals["is_rocm"] = args.is_rocm
 ################################################################################
 
 
-def prepare_string_for_formatting(blob: str, format_keywords: List[str]) -> str:
+def prepare_string_for_formatting(blob: str, format_keywords: list[str]) -> str:
     """
     Replace curly brackets ('{' or '}') with escape characters ('{{' or '}}')
     to prepare the string to be formatted by `str.format()`. `str.format()`
@@ -103,7 +102,7 @@ def prepare_string_for_formatting(blob: str, format_keywords: List[str]) -> str:
 
 
 def generate_optimized_grad_sum_loop_access(
-    blob: str, other_formats: Optional[Dict[str, str]] = None
+    blob: str, other_formats: dict[str, str] | None = None
 ) -> str:
     """
     Generate an optimized code for grad_sum accessing
@@ -156,13 +155,13 @@ def get_max_vecs_template_configs(
     fixed_max_vecs_per_thread: int,
     use_subwarp_shuffle: bool,
     use_vec_blocking: bool,
-) -> List[Tuple[int, int, str]]:
+) -> list[tuple[int, int, str]]:
     """
     Generate the template configs for each kFixedMaxVecsPerThread,
     kThreadGroupSize, and kUseVecBlocking
     """
     warp_size = items_per_warp // 4
-    configs: List[Tuple[int, int, str]] = []
+    configs: list[tuple[int, int, str]] = []
 
     if use_vec_blocking:
         # kFixedMaxVecsPerThread = fixed_max_vecs_per_thread
@@ -216,7 +215,6 @@ def dispatch_non_vec_blocking_kernel(
             "kThreadGroupSize": kThreadGroupSize,
             "kUseVecBlocking": kUseVecBlocking,
         }
-        max_D_val = kFixedMaxVecsPerThread * kThreadGroupSize * 4
         d_blob = """if (MAX_D <= {max_D_val}) {                               \\
              [[ maybe_unused ]] const int max_vecs_per_thread =               \\
                {kFixedMaxVecsPerThread};                                      \\
@@ -370,7 +368,7 @@ env.globals["compute_global_weight_decay"] = compute_global_weight_decay
 
 
 # Format the macro call to generate pta::PackedTensorAccessors
-def make_pta_acc_format(pta_str_list: List[str], func_name: str) -> List[str]:
+def make_pta_acc_format(pta_str_list: list[str], func_name: str) -> list[str]:
     new_str_list = []
     for pta_str in pta_str_list:
         if "packed_accessor" in pta_str:
@@ -402,7 +400,7 @@ def make_pta_acc_format(pta_str_list: List[str], func_name: str) -> List[str]:
     return new_str_list
 
 
-def make_pta_acc_builder_format(pta_str_list: List[str]) -> List[str]:
+def make_pta_acc_builder_format(pta_str_list: list[str]) -> list[str]:
     new_str_list = []
     for pta_str in pta_str_list:
         if "packed_accessor" in pta_str:
@@ -432,7 +430,7 @@ def make_pta_acc_builder_format(pta_str_list: List[str]) -> List[str]:
     return new_str_list
 
 
-def replace_pta_namespace(pta_str_list: List[str]) -> List[str]:
+def replace_pta_namespace(pta_str_list: list[str]) -> list[str]:
     return [
         pta_str.replace("at::PackedTensorAccessor", "pta::PackedTensorAccessor")
         for pta_str in pta_str_list
@@ -441,10 +439,10 @@ def replace_pta_namespace(pta_str_list: List[str]) -> List[str]:
 
 def replace_placeholder_types(
     # pyre-fixme[11]: Annotation `TensorType` is not defined as a type.
-    arg_str_list: List[str],
+    arg_str_list: list[str],
     # pyre-fixme[11]: Annotation `TensorType` is not defined as a type.
-    type_combo: Optional[Dict[str, TensorType]],
-) -> List[str]:
+    type_combo: dict[str, TensorType] | None,
+) -> list[str]:
     """
     Replace the placeholder types with the primitive types
     """
@@ -460,7 +458,7 @@ def replace_placeholder_types(
     return new_str_list
 
 
-def to_upper_placeholder_types(arg_str_list: List[str]) -> List[str]:
+def to_upper_placeholder_types(arg_str_list: list[str]) -> list[str]:
     """
     Make the placeholder type names upper cases
     """

@@ -6,17 +6,16 @@
 # pyre-strict
 # flake8: noqa F401
 
-import argparse
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any
 
 import jinja2
 
 try:
     from .jinja_environment import env
     from .scripts_argsparse import args
-except:
+except ImportError:
     # pyre-ignore[21]
     from jinja_environment import env
 

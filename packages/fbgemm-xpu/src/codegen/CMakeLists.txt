@@ -67,8 +67,8 @@ set(FORWARD_GENERATED_SOURCES
 
 set(FORWARD_GENERATED_HEADERS
     ${FORWARD_GEN_DIR}/gen_embedding_forward_dense_unweighted_nobag_kernel.h
-    ${FORWARD_GEN_DIR}/gen_embedding_forward_split_unweighted_nobag_kernel.h
     ${FORWARD_GEN_DIR}/gen_embedding_forward_dense_unweighted_nobag_kernel_small.h
+    ${FORWARD_GEN_DIR}/gen_embedding_forward_split_unweighted_nobag_kernel.h
     ${FORWARD_GEN_DIR}/gen_embedding_forward_split_unweighted_nobag_kernel_small.h
 )
 
@@ -80,16 +80,18 @@ add_custom_command(
         ${CMAKE_COMMAND} -E make_directory ${FORWARD_GEN_DIR}
     COMMAND
         ${Python3_EXECUTABLE}
-            ${GENSCRIPT_DIR}/generate_forward_split.py --opensource
+            ${GENSCRIPT_DIR}/generate_forward_split.py
+            --opensource
             --install_dir ${CODEGEN_OUTPUT_DIR}
     DEPENDS
-        ${GENSCRIPT_DIR}/generate_forward_split.py
         ${GENSCRIPT_DIR}/common.py
+        ${GENSCRIPT_DIR}/generate_forward_split.py
         ${GENSCRIPT_DIR}/jinja_environment.py
         ${GENSCRIPT_DIR}/scripts_argsparse.py
-        ${TRAINING_DIR}/forward/embedding_forward_split_kernel_template.h
-        ${TRAINING_DIR}/forward/embedding_forward_split_kernel_nobag_small_template.h
+        ${GENSCRIPT_DIR}/torch_type_utils.py
         ${TRAINING_DIR}/forward/embedding_forward_nobag_unweighted_host_template.cpp
+        ${TRAINING_DIR}/forward/embedding_forward_split_kernel_nobag_small_template.h
+        ${TRAINING_DIR}/forward/embedding_forward_split_kernel_template.h
         ${TRAINING_DIR}/pt2/embedding_forward_nobag_unweighted_pt2_wrapper_template.cpp
     COMMENT "Generating forward split embedding SYCL sources"
     VERBATIM
@@ -98,9 +100,8 @@ add_custom_command(
 # --------------------------------------------------------------------------
 # Backward-split code generation
 #
-# generate_backward_split.py accepts --output-dir and writes all files
-# directly into that directory (no sub-directory).  We point it to
-# FORWARD_GEN_DIR so that all generated headers/sources live together.
+# generate_backward_split.py uses the same --install_dir interface as the
+# forward generator and writes files under the sycl_kernels/ sub-directory.
 # --------------------------------------------------------------------------
 set(BACKWARD_GENERATED_SOURCES
     ${FORWARD_GEN_DIR}/gen_embedding_backward_dense_unweighted_nobag_host.cpp
@@ -122,12 +123,16 @@ add_custom_command(
     COMMAND
         ${Python3_EXECUTABLE}
             ${GENSCRIPT_DIR}/generate_backward_split.py
-            --template-dir ${TRAINING_DIR}/backward
-            --output-dir   ${FORWARD_GEN_DIR}
+            --opensource
+            --install_dir ${CODEGEN_OUTPUT_DIR}
     DEPENDS
+        ${GENSCRIPT_DIR}/common.py
         ${GENSCRIPT_DIR}/generate_backward_split.py
-        ${TRAINING_DIR}/backward/embedding_backward_split_kernel_templates.h
+        ${GENSCRIPT_DIR}/jinja_environment.py
+        ${GENSCRIPT_DIR}/scripts_argsparse.py
+        ${GENSCRIPT_DIR}/torch_type_utils.py
         ${TRAINING_DIR}/backward/embedding_backward_nobag_unweighted_host_template.cpp
+        ${TRAINING_DIR}/backward/embedding_backward_split_kernel_templates.h
         ${TRAINING_DIR}/pt2/embedding_forward_nobag_unweighted_pt2_wrapper_template.cpp
     COMMENT "Generating backward split embedding SYCL sources"
     VERBATIM
