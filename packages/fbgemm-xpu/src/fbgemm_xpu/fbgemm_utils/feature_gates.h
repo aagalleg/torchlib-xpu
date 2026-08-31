@@ -10,16 +10,9 @@
 
 namespace fbgemm_xpu::config {
 
-#define ENUMERATE_ALL_FEATURE_FLAGS       \
-  X(TBE_V2)                               \
-  X(TBE_ENSEMBLE_ROWWISE_ADAGRAD)         \
-  X(TBE_ANNOTATE_KINETO_TRACE)            \
-  X(TBE_ROCM_INFERENCE_PACKED_BAGS)       \
-  X(TBE_ROCM_HIP_BACKWARD_KERNEL)         \
-  X(BOUNDS_CHECK_INDICES_V2)              \
-  X(TBE_REPORT_INPUT_PARAMS)              \
-  X(TBE_CPU_OUTPUT_DISABLE_PINNED_MEMORY) \
-  X(TBE_USE_TUNED_SEGMENT_LENGTHS_CTA_B200)
+#define ENUMERATE_ALL_FEATURE_FLAGS \
+  X(TBE_V2)                         \
+  X(TBE_ANNOTATE_KINETO_TRACE)
 // X(EXAMPLE_FEATURE_FLAG)
 
 enum class FeatureGateName {
@@ -33,8 +26,5 @@ std::string to_string(const FeatureGateName& value);
 bool check_feature_gate_key(const std::string& key);
 
 bool is_feature_enabled(const FeatureGateName& feature);
-
-bool is_feature_enabled_from_env(const FeatureGateName& feature);
-
 
 }  // namespace fbgemm_xpu::config

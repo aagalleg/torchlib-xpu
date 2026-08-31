@@ -24,7 +24,7 @@ std::string to_string(const FeatureGateName& value) {
   return "UNKNOWN";
 }
 
-bool ev_check_key(const std::string& key) {
+static bool env_check_key(const std::string& key) {
   const auto env_var = "FBGEMM_" + key;
 
   const auto value = std::getenv(env_var.c_str());
@@ -39,35 +39,22 @@ bool ev_check_key(const std::string& key) {
   }
 }
 
-static bool check_feature_gate_key_impl(
-    const std::string& key,
-    bool check_env_vars_only [[maybe_unused]]) {
-  // Cache feature flags to avoid repeated JK and env var checks
+bool check_feature_gate_key(const std::string& key) {
+  // Cache feature flags to avoid repeated environment lookups.
   static std::map<std::string, bool> feature_flags_cache;
   if (const auto search = feature_flags_cache.find(key);
       search != feature_flags_cache.end()) {
     return search->second;
   }
 
-  const auto value = ev_check_key(key);
+  const auto value = env_check_key(key);
 
   feature_flags_cache.insert({key, value});
   return value;
 }
 
-bool check_feature_gate_key(const std::string& key) {
-  static const auto no_jk = false;
-
-  return check_feature_gate_key_impl(key, no_jk);
-}
-
 bool is_feature_enabled(const FeatureGateName& feature) {
   return check_feature_gate_key(to_string(feature));
-}
-
-bool is_feature_enabled_from_env(const FeatureGateName& feature) {
-  return check_feature_gate_key_impl(
-      to_string(feature), /* check_env_vars_only */ true);
 }
 
 }  // namespace fbgemm_xpu::config
