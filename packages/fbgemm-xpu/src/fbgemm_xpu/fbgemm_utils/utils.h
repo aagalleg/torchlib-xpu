@@ -17,8 +17,6 @@
 #include <c10/macros/Macros.h>
 #include <sycl/sycl.hpp>
 
-#include "dispatch_macros.h"
-
 namespace fbgemm_xpu {
 
 constexpr int kVecWidth = 4;

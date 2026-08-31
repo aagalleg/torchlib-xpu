@@ -17,6 +17,8 @@
 {%- set host_fn = "dense" if dense else "rowwise_adagrad" %}
 {%- set find_segs_kernel = "Dense" if dense else "Split" %}
 
+#include "../fbgemm_utils/dispatch_macros.h"
+
 ////////////////////////////////////////////////////////////////////////////////
 // SYCL PORT MAPPING TO FBGEMM CUDA SOURCE - BACKWARD HOST DISPATCH
 ////////////////////////////////////////////////////////////////////////////////
