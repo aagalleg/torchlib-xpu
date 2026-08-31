@@ -502,6 +502,27 @@ Tensor split_embedding_codegen_lookup_rowwise_adagrad_function_pt2_xpu(
     const c10::SymInt max_B_feature_rank = -1,
     const c10::SymInt vbe_output_size = -1,
     std::optional<Tensor> vbe_output = std::nullopt) {
+    TORCH_CHECK(aux_tensor.size() == AUX_TENSOR_SIZE,
+                "Expected ",
+                AUX_TENSOR_SIZE,
+                " auxiliary tensors but got ",
+                aux_tensor.size());
+    TORCH_CHECK(aux_bool.size() == AUX_BOOL_SIZE,
+                "Expected ",
+                AUX_BOOL_SIZE,
+                " auxiliary bools but got ",
+                aux_bool.size());
+    TORCH_CHECK(aux_int.size() == AUX_INT_SIZE,
+                "Expected ",
+                AUX_INT_SIZE,
+                " auxiliary ints but got ",
+                aux_int.size());
+    TORCH_CHECK(aux_float.size() == AUX_FLOAT_SIZE,
+                "Expected ",
+                AUX_FLOAT_SIZE,
+                " auxiliary floats but got ",
+                aux_float.size());
+
     // Load the config value from JK once
     static auto is_tbev2_enabled =
         config::is_feature_enabled(config::FeatureGateName::TBE_V2);
