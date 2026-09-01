@@ -46,8 +46,6 @@ struct Vec4T<float> : public Vec4BaseT<float> {
 
     explicit Vec4T(const at::BFloat16* p) { load(p); }
 
-    explicit Vec4T(const c10::Float8_e4m3fnuz* p) { load(p); }
-
     void load(const float* p) { acc = *((const sycl::float4*)p); }
 
     void load(const at::Half* p) {
@@ -67,11 +65,6 @@ struct Vec4T<float> : public Vec4BaseT<float> {
         acc.y() = static_cast<float>(p[1]);
         acc.z() = static_cast<float>(p[2]);
         acc.w() = static_cast<float>(p[3]);
-    }
-
-    void load(const c10::Float8_e4m3fnuz* p) {
-        assert(false &&
-               "Loading Float8_e4m3fnuz into Vec4T<float> is not supported.");
     }
 
     void load(const uint8_t* p) {
@@ -133,8 +126,6 @@ struct Vec4T<at::Half> : public Vec4BaseT<at::Half> {
     explicit Vec4T(const at::Half* p) { load(p); }
     explicit Vec4T(const at::BFloat16* p) { load(p); }
 
-    explicit Vec4T(const c10::Float8_e4m3fnuz* p) { load(p); }
-
     explicit Vec4T(const float* p) { load(p); }
 
     void load(const at::Half* p) {
@@ -157,12 +148,6 @@ struct Vec4T<at::Half> : public Vec4BaseT<at::Half> {
     }
 
     void load(const float* p) { acc = *((const sycl::float4*)p); }
-
-    void load(const c10::Float8_e4m3fnuz* p) {
-        assert(
-            false &&
-            "Loading Float8_e4m3fnuz into Vec4T<at::Half> is not supported.");
-    }
 
     void load(const uint8_t* p) {
         assert(false &&

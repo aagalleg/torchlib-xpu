@@ -138,6 +138,7 @@ namespace fbgemm_xpu {
     typename output_t,
     typename index_t,
     size_t kThreadGroupSize>
+    [[sycl::reqd_sub_group_size(fbgemm_xpu::kThreadGroupSize)]]
     inline void {{ mdesc | capitalize }}EmbeddingNobagCodegenForwardUnweightedSmallKernel<emb_t, cache_t, output_t, index_t, kThreadGroupSize>
     ::operator()(const sycl::nd_item<2>& item) const {
         auto b_t = item.get_group(0) * item.get_local_range(0) +

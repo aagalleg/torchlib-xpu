@@ -38,12 +38,6 @@
         at::ScalarType::Float, _cache_t, float, NAME, __VA_ARGS__)            \
     PRIVATE_CASE_TYPE_EMB(                                                    \
         at::ScalarType::Half, _cache_t, at::Half, NAME, __VA_ARGS__)          \
-    PRIVATE_CASE_TYPE_EMB(                                                    \
-        at::ScalarType::Float8_e4m3fnuz,                                      \
-        _cache_t,                                                             \
-        at::Float8_e4m3fnuz,                                                  \
-        NAME,                                                                 \
-        __VA_ARGS__)                                                          \
     default:                                                                  \
       AT_ERROR(#NAME, " not implemented for emb_t '", toString(_emb_t), "'"); \
   }

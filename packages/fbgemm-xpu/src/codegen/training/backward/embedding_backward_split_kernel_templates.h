@@ -286,7 +286,7 @@ namespace fbgemm_xpu {
                 const int32_t d_vec = vec * kThreadGroupSize + threadIdx_x;
                 const int32_t d = d_vec * VEC_WIDTH;
 
-                const float4* grad = &smem_grad_sum[d_vec].acc;
+                const sycl::float4* grad = &smem_grad_sum[d_vec].acc;
                 auto gx = grad->x();
                 auto gy = grad->y();
                 auto gz = grad->z();
@@ -311,7 +311,7 @@ namespace fbgemm_xpu {
                 const int32_t d_vec = vec * kThreadGroupSize + threadIdx_x;
                 const int32_t d = d_vec * VEC_WIDTH;
 
-                const float4* grad = &grad_sum[vec].acc;
+                const sycl::float4* grad = &grad_sum[vec].acc;
                 auto gx = grad->x();
                 auto gy = grad->y();
                 auto gz = grad->z();
@@ -580,6 +580,7 @@ namespace fbgemm_xpu {
 {%- endif %}
             {}
 
+        [[sycl::reqd_sub_group_size(kThreadGroupSize)]]
         void SYCL_EXTERNAL operator()(const sycl::nd_item<2>& item) const {
 
         constexpr int VEC_WIDTH = 4;
@@ -892,6 +893,7 @@ namespace fbgemm_xpu {
 {%- endif %}
             {}
 
+        [[sycl::reqd_sub_group_size(kThreadGroupSize)]]
         void SYCL_EXTERNAL operator()(const sycl::nd_item<2>& item) const {
 
         constexpr int VEC_WIDTH = 4;

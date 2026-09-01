@@ -114,6 +114,7 @@ void CompactRunsKernel<index_t>::operator()(
 }
 
 template <typename index_t, typename info_acc_t, bool nobag, bool vbe>
+[[sycl::reqd_sub_group_size(fbgemm_xpu::kThreadGroupSize)]]
 void LinearizeIndexKernel<index_t, info_acc_t, nobag, vbe>::operator()(
     const sycl::nd_item<1>& item) const {
     const auto threadIdx_x = item.get_local_id(0);

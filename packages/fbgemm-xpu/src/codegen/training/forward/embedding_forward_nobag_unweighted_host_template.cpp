@@ -130,9 +130,7 @@ namespace fbgemm_xpu {
             dev_weights
         );
 
-        {%- if dense %}
         SYCL_DEVICE_GUARD(dev_weights);
-        {%- endif %}
         int32_t total_L = indices.numel();
         int32_t T = weights_offsets.numel();
         TORCH_CHECK_GT(T, 0);
@@ -148,7 +146,7 @@ namespace fbgemm_xpu {
         Tensor output;
         SparseType o_dtype = static_cast<SparseType>(output_dtype);
         TORCH_CHECK(o_dtype == SparseType::FP32 || o_dtype == SparseType::FP16 ||
-                    o_dtype == SparseType::BF16 || o_dtype == SparseType::INT8);
+                    o_dtype == SparseType::BF16);
 
         int64_t adjusted_D = D;
 

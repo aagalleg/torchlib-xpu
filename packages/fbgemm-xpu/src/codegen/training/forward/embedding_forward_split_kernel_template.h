@@ -153,6 +153,7 @@ namespace fbgemm_xpu {
     {%- endif %}
     typename index_t,
     size_t kThreadGroupSize>
+    [[sycl::reqd_sub_group_size(kThreadGroupSize)]]
     inline void {{ mdesc | capitalize }}EmbeddingNobagCodegenForwardUnweightedKernel<emb_t, cache_t, output_t, {%- if not dense %}use_lxu_cache, {%- endif %}index_t, kThreadGroupSize>
     ::operator()(const sycl::nd_item<2>& item) const {
 

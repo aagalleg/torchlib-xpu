@@ -226,7 +226,7 @@ class SplitEmbeddingBackwardFindLongSegments{{ find_segs_kernel }}Kernel;
         if (lxu_cache_locations.size(0) > 0) {
             lxu_cache_locations_sorted = at::empty_like(lxu_cache_locations);
             // size_t temp_storage_bytes = 0;
-            AT_DISPATCH_INDEX_TYPES(indices.scalar_type(), "split_embedding_nobag_backward_codegen_{{ host_fn }}d_unweighted_exact_xpu_1", [&] {
+            AT_DISPATCH_INDEX_TYPES(indices.scalar_type(), "split_embedding_nobag_backward_codegen_{{ host_fn }}_unweighted_exact_xpu_1", [&] {
                 auto sorted = at::sort(linear_indices, 0, false);
                 linear_indices_sorted.copy_(std::get<0>(sorted));
                 auto permutation = std::get<1>(sorted);
