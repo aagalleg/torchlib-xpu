@@ -72,39 +72,43 @@ namespace fbgemm_xpu {
 /**
  * @brief ReorderBatchedAdLengthsKernel operator implementation
  */
-template <typename scalar_t>
-void ReorderBatchedAdLengthsKernel<scalar_t>::operator()(
+template <typename Dtype>
+void ReorderBatchedAdLengthsKernel<Dtype>::operator()(
         const sycl::nd_item<2>& item) const {
     const int32_t B = batch_offsets_.size(0) - 1;
 
     const int32_t num_ads_in_batch = batch_offsets_[B];
-    // warp-per-segment.
-    const auto b_t =
-            item.get_group(0) * item.get_local_range(1) + item.get_local_id(1);
-    const int32_t b = b_t % B;
-    const int32_t t = b_t / B;
-    if (t >= T_) {
-        return;
-    }
+    const int64_t BT = static_cast<int64_t>(B) * T_;
 
-    const int32_t num_ads_b = batch_offsets_[b + 1] - batch_offsets_[b];
-    const int32_t input_segment_start =
-            broadcast_lengths_ ? T_ * b + t : T_ * batch_offsets_[b] + t * num_ads_b;
-    const int32_t output_segment_start = t * num_ads_in_batch + batch_offsets_[b];
+    const size_t b_t_init =
+            item.get_group(0) * item.get_local_range(0) + item.get_local_id(0);
 
-    for (auto i = item.get_local_id(0); i < num_ads_b;
-              i += item.get_local_range(0)) {
-        reordered_cat_ad_lengths_[output_segment_start + i] = broadcast_lengths_
-                ? cat_ad_lengths_[input_segment_start]
-                : cat_ad_lengths_[input_segment_start + i];
+    const size_t stride = item.get_group_range(0) * item.get_local_range(0);
+
+    for (size_t b_t = b_t_init; b_t < static_cast<size_t>(BT); b_t += stride) {
+        const int32_t b = static_cast<int32_t>(b_t % B);
+        const int32_t t = static_cast<int32_t>(b_t / B);
+
+        const int32_t num_ads_b = batch_offsets_[b + 1] - batch_offsets_[b];
+        const int32_t input_segment_start = broadcast_lengths_
+                ? T_ * b + t
+                : T_ * batch_offsets_[b] + t * num_ads_b;
+        const int32_t output_segment_start = t * num_ads_in_batch + batch_offsets_[b];
+
+        for (auto i = item.get_local_id(1); i < num_ads_b;
+                  i += item.get_local_range(1)) {
+            reordered_cat_ad_lengths_[output_segment_start + i] = broadcast_lengths_
+                    ? cat_ad_lengths_[input_segment_start]
+                    : cat_ad_lengths_[input_segment_start + i];
+        }
     }
 }
 
 /**
  * @brief NarrowBroadcastIndicesKernel operator implementation
  */
-template <typename scalar_t, typename index_t>
-void NarrowBroadcastIndicesKernel<scalar_t, index_t>::operator()(
+template <typename Dtype, typename index_t>
+void NarrowBroadcastIndicesKernel<Dtype, index_t>::operator()(
         const sycl::nd_item<1>& item) const {
     const auto lane_id = item.get_local_id(0) % kThreadGroupSize;
     const auto warp_id =
@@ -131,8 +135,8 @@ void NarrowBroadcastIndicesKernel<scalar_t, index_t>::operator()(
 /**
  * @brief NarrowBatchedBroadcastIndicesKernel operator implementation
  */
-template <typename scalar_t, typename index_t>
-void NarrowBatchedBroadcastIndicesKernel<scalar_t, index_t>::operator()(
+template <typename Dtype, typename index_t>
+void NarrowBatchedBroadcastIndicesKernel<Dtype, index_t>::operator()(
         const sycl::nd_item<1>& item) const {
     const auto B = batch_offsets_.size(0) - 1;
     const auto num_ads_in_batch = static_cast<uint32_t>(batch_offsets_[B]);
@@ -174,49 +178,49 @@ void NarrowBatchedBroadcastIndicesKernel<scalar_t, index_t>::operator()(
 /**
  * @brief ReorderBatchedAdIndicesKernel operator implementation
  */
-template <typename scalar_t, typename index_t>
-void ReorderBatchedAdIndicesKernel<scalar_t, index_t>::operator()(
+template <typename Dtype, typename index_t>
+void ReorderBatchedAdIndicesKernel<Dtype, index_t>::operator()(
         const sycl::nd_item<2>& item) const {
     const int32_t B = batch_offsets_.size(0) - 1;
     const int32_t num_ads_in_batch = batch_offsets_[B];
-    // warp-per-segment.
-    const auto b_t =
-            item.get_group(0) * item.get_local_range(1) + item.get_local_id(1);
-    const int32_t b = b_t % B;
-    const int32_t t = b_t / B;
-    if (t >= T_) {
-        return;
-    }
+    const int64_t BT = static_cast<int64_t>(B) * T_;
+    const size_t b_t_init =
+            item.get_group(0) * item.get_local_range(0) + item.get_local_id(0);
+    const size_t stride = item.get_group_range(0) * item.get_local_range(0);
+    for (size_t b_t = b_t_init; b_t < static_cast<size_t>(BT); b_t += stride) {
+        const int32_t b = static_cast<int32_t>(b_t % B);
+        const int32_t t = static_cast<int32_t>(b_t / B);
 
-    const auto num_ads_b = batch_offsets_[b + 1] - batch_offsets_[b];
-    const auto output_segment_offset_start =
-            t * num_ads_in_batch + batch_offsets_[b];
-    const auto output_segment_start =
-            reordered_cat_ad_offsets_[output_segment_offset_start];
-    const int32_t input_segment_offset_start =
-            broadcast_indices_ ? T_ * b + t : T_ * batch_offsets_[b] + t * num_ads_b;
-    const int32_t input_segment_offset_end = broadcast_indices_
-            ? input_segment_offset_start + 1
-            : input_segment_offset_start + num_ads_b;
-    const auto input_segment_start = cat_ad_offsets_[input_segment_offset_start];
-    const auto input_segment_end = cat_ad_offsets_[input_segment_offset_end];
-    const auto num_elements = input_segment_end - input_segment_start;
+        const auto num_ads_b = batch_offsets_[b + 1] - batch_offsets_[b];
+        const auto output_segment_offset_start =
+                t * num_ads_in_batch + batch_offsets_[b];
+        const auto output_segment_start =
+                reordered_cat_ad_offsets_[output_segment_offset_start];
+        const int32_t input_segment_offset_start =
+                broadcast_indices_ ? T_ * b + t : T_ * batch_offsets_[b] + t * num_ads_b;
+        const int32_t input_segment_offset_end = broadcast_indices_
+                ? input_segment_offset_start + 1
+                : input_segment_offset_start + num_ads_b;
+        const auto input_segment_start = cat_ad_offsets_[input_segment_offset_start];
+        const auto input_segment_end = cat_ad_offsets_[input_segment_offset_end];
+        const auto num_elements = input_segment_end - input_segment_start;
 
-    if (broadcast_indices_) {
-        for (auto i = item.get_local_id(0); i < num_ads_b * num_elements;
-                  i += item.get_local_range(0)) {
-            reordered_cat_ad_indices_[output_segment_start + i] =
-                    cat_ad_indices_[input_segment_start + i % num_elements];
-        }
-    } else {
-        // Idea: we want to copy the entire segment of size sum_a(length_{b, t, a})
-        // from starting point (given by cat_ad_offsets[b, t])
-        // to end point (given by reordered_cat_ad_indices[t][b])
-        for (auto i = item.get_local_id(0);
-                  i < input_segment_end - input_segment_start;
-                  i += item.get_local_range(0)) {
-            reordered_cat_ad_indices_[output_segment_start + i] =
-                    cat_ad_indices_[input_segment_start + i];
+        if (broadcast_indices_) {
+            for (auto i = item.get_local_id(1); i < num_ads_b * num_elements;
+                      i += item.get_local_range(1)) {
+                reordered_cat_ad_indices_[output_segment_start + i] =
+                        cat_ad_indices_[input_segment_start + i % num_elements];
+            }
+        } else {
+            // Idea: we want to copy the entire segment of size sum_a(length_{b, t, a})
+            // from starting point (given by cat_ad_offsets[b, t])
+            // to end point (given by reordered_cat_ad_indices[t][b])
+            for (auto i = item.get_local_id(1);
+                      i < input_segment_end - input_segment_start;
+                      i += item.get_local_range(1)) {
+                reordered_cat_ad_indices_[output_segment_start + i] =
+                        cat_ad_indices_[input_segment_start + i];
+            }
         }
     }
 }
@@ -263,15 +267,17 @@ at::Tensor reorder_batched_ad_lengths_xpu(
         ? at::empty({T * num_ads_in_batch}, cat_ad_lengths.options())
         : at::empty_like(cat_ad_lengths);
 
-    const int64_t grid_size = (B * T + 32 - 1) / 32;
+    const int64_t grid_size_uncapped = (B * T + 32 - 1) / 32;
     TORCH_CHECK(
-        grid_size >= 0,
+        grid_size_uncapped >= 0,
         "grid_size must be positive, got ",
-        grid_size,
+        grid_size_uncapped,
         " where B =",
         B,
         " and T =",
         T);
+
+    const uint32_t grid_size = xpu_cap_grid_dim_x(grid_size_uncapped, 32 * 32);
 
     sycl::queue& queue = c10::xpu::getCurrentXPUStream().queue();
         FBGEMM_DISPATCH_ALL_TYPES(
@@ -464,8 +470,10 @@ at::Tensor reorder_batched_ad_indices_xpu(
                             auto max_warp_size = max_work_group_size / kNumWarps;
                             const int global_dim_y =
                                     max_warp_size < kThreadGroupSize ? max_warp_size : kThreadGroupSize;
-                            const int global_dim_x =
-                                    xpu_calc_xblock_count(B * T, kNumWarps) * kNumWarps;
+                            const uint32_t num_groups = xpu_cap_grid_dim_x(
+                                    xpu_calc_xblock_count(B * T, kNumWarps),
+                                    static_cast<int64_t>(kNumWarps) * global_dim_y);
+                            const uint32_t global_dim_x = num_groups * kNumWarps;
                             queue.submit([&](sycl::handler& cgh) {
                                 cgh.parallel_for<ReorderBatchedAdIndicesKernel<
                                         scalar_t,

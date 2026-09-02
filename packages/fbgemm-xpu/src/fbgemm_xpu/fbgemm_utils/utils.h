@@ -8,6 +8,9 @@
 
 #pragma once
 
+#include <algorithm>
+#include <limits>
+
 #include <ATen/xpu/XPUContext.h>
 
 #include "dispatch_macros.h"
@@ -38,7 +41,7 @@ static inline int64_t syclDeviceMaxWorkGroupSize(
  * @param threads_per_block Number of work-items per work-group
  * @return Number of work-groups needed (capped at max_blocks)
  */
-inline uint32_t xpu_calc_xblock_count_base(int num_items, int threads_per_block) {
+inline uint32_t xpu_calc_xblock_count_base(int64_t num_items, int64_t threads_per_block) {
   // The number of threads can be as high as 2048 on some newer architectures,
   // but this is not portable.
   TORCH_CHECK(
@@ -62,11 +65,38 @@ inline uint32_t xpu_calc_xblock_count_base(int num_items, int threads_per_block)
  * @param threads_per_block Number of work-items per work-group
  * @return Number of work-groups needed
  */
-inline uint32_t xpu_calc_xblock_count(int num_items, int threads_per_block) {
+inline uint32_t xpu_calc_xblock_count(int64_t num_items, int64_t threads_per_block) {
   TORCH_CHECK(
       num_items >= 0,
       "When calculating block counts, the number of items must be positive!");
   return xpu_calc_xblock_count_base(num_items, threads_per_block);
+}
+
+/**
+ * @brief Cap a work-group count so a launch's flattened work-item count fits
+ * in an `int`.
+ *
+ * DPC++ assumes by default (`-fsycl-id-queries-fit-in-int`) that the total
+ * number of work-items in a submission fits in a 32-bit `int`; `queue::submit`
+ * throws once that product exceeds INT32_MAX. This mirrors upstream FBGEMM's
+ * `utils::cuda::cap_grid_dim_x`, used there to stay under HIP's analogous
+ * 2^32 launch-size limit.
+ *
+ * Callers MUST pair this with a grid-stride loop in the kernel so every
+ * logical unit of work in [0, num_groups) is still covered by the
+ * (possibly smaller) capped launch.
+ *
+ * @param num_groups Requested number of work-groups along one dimension
+ * @param threads_per_group Total work-items per work-group across all
+ *     dimensions of the launch (e.g. local_dim0 * local_dim1)
+ * @return Number of work-groups to actually launch (<= num_groups)
+ */
+inline uint32_t xpu_cap_grid_dim_x(int64_t num_groups, int64_t threads_per_group) {
+  TORCH_CHECK(num_groups >= 0, "num_groups must be non-negative");
+  TORCH_CHECK(threads_per_group > 0, "threads_per_group must be positive");
+  constexpr int64_t kIntMax = std::numeric_limits<int32_t>::max();
+  const int64_t max_groups = std::max<int64_t>(1, kIntMax / threads_per_group);
+  return static_cast<uint32_t>(std::min(num_groups, max_groups));
 }
 
 #define SYCL_DEVICE_GUARD(TENSOR)          \
