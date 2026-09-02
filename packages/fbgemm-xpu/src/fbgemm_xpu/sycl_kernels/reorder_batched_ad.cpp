@@ -607,7 +607,7 @@ at::Tensor reorder_batched_ad_indices_xpu(
                         "reorder_batched_ad_indices_kernel_xpu_2",
                         [&] {
                             constexpr auto kNumWarps = 32;
-                            const int max_work_group_size =kMaxThreads;
+                            const int max_work_group_size = syclDeviceMaxWorkGroupSize();
                             auto max_warp_size = max_work_group_size / kNumWarps;
                             const int global_dim_y =
                                     max_warp_size < kThreadGroupSize ? max_warp_size : kThreadGroupSize;
