@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Intel Corporation. All Rights Reserved.
+# SPDX-License-Identifier: BSD-3-Clause
+
 cmake_minimum_required(VERSION 3.18)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
