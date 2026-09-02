@@ -25,6 +25,14 @@ Enable expand_into_jagged_permute_test.py on the current accelerator using the
 shared accelerator_available/current_accelerator helpers and device-agnostic
 tensor transfers.
 
+Also adds XPU support to sparse/reorder_batched_test.py for the
+reorder_batched_ad_lengths and reorder_batched_ad_indices operators. The
+remaining accelerator tests in that file stay gated on gpu_unavailable, so they
+keep running on CUDA and skip automatically on XPU:
+reorder_batched_sequence_embeddings has no XPU implementation, and the
+*_large_grid tests are ROCm grid-overflow regressions that allocate B = 2**27
+elements and are only guarded by the CUDA-specific gpu_memory_lt_gb helper.
+
 Signed-off-by: Alberto Gallegos <alberto.gallegos.muro@intel.com>
 Signed-off-by: Felipe Leza Alvarez <felipe.leza.alvarez@intel.com>
 
@@ -38,8 +46,9 @@ Co-authored-by: Felipe Leza Alvarez <felipe.leza.alvarez@intel.com>
  .../tbe/utils/generate_vbe_metadata_test.py   |  23 ++-
  .../tbe/utils/split_embeddings_utils_test.py  |  33 +++-
  .../jagged/expand_into_jagged_permute_test.py |  29 ++--
- .../test/jagged/jagged_index_select_2d_test.py |  22 ++++++++++++++++--
- 9 files changed, 222 insertions(+), 111 deletions(-)
+ .../test/jagged/jagged_index_select_2d_test.py | 22 ++++++++++++++++--
+ .../test/sparse/reorder_batched_test.py       |  29 ++++---
+ 10 files changed, 240 insertions(+), 122 deletions(-)
 
 diff --git a/fbgemm_gpu/test/sparse/misc_ops_test.py b/fbgemm_gpu/test/sparse/misc_ops_test.py
 index edb0d3615..2876ee209 100644
@@ -964,6 +973,127 @@ index 70b2ef276..84a129fc7 100644
          is_float = jagged_tensor_dtype in [torch.float, torch.half, torch.bfloat16]
          lengths = torch.randint(
              low=0,
+diff --git a/fbgemm_gpu/test/sparse/reorder_batched_test.py b/fbgemm_gpu/test/sparse/reorder_batched_test.py
+index 8dc2507..f1a9aeb 100644
+--- a/fbgemm_gpu/test/sparse/reorder_batched_test.py
++++ b/fbgemm_gpu/test/sparse/reorder_batched_test.py
+@@ -21,19 +21,26 @@ from .common import extend_test_class, open_source
+ 
+ if open_source:
+     # pyre-ignore[21]
+-    from test_utils import gpu_memory_lt_gb, gpu_unavailable, optests, skipIfRocm
++    from test_utils import accelerator_unavailable, current_accelerator, gpu_memory_lt_gb, gpu_unavailable, optests, skipIfRocm
+ else:
+     import fbgemm_gpu.sparse_ops  # noqa: F401, E402
+     from fbgemm_gpu.test.test_utils import (
++        accelerator_unavailable,
++        current_accelerator,
+         gpu_memory_lt_gb,
+         gpu_unavailable,
+         optests,
+         skipIfRocm,
+     )
+ 
++# Registers the XPU (Intel GPU) FBGEMM operator implementations.
++import fbgemm_xpu  # noqa: F401, E402
++
++ACCELERATOR = current_accelerator()
++
+ 
+ class ReorderBatchedTest(unittest.TestCase):
+-    @unittest.skipIf(*gpu_unavailable)
++    @unittest.skipIf(*accelerator_unavailable)
+     @given(
+         B=st.integers(min_value=1, max_value=20),
+         T=st.integers(min_value=1, max_value=20),
+@@ -58,7 +65,7 @@ class ReorderBatchedTest(unittest.TestCase):
+         if broadcast_lengths:
+             cat_ad_lengths = (
+                 torch.cat([torch.tensor([L for _ in range(T)]) for _ in range(B)], 0)
+-                .cuda()
++                .to(ACCELERATOR)
+                 .to(Dtype)
+             )
+             cat_ad_lengths_broadcasted = cat_ad_lengths.tile([A])
+@@ -67,11 +74,11 @@ class ReorderBatchedTest(unittest.TestCase):
+                 torch.cat(
+                     [torch.tensor([L for _ in range(T * A)]) for _ in range(B)], 0
+                 )
+-                .cuda()
++                .to(ACCELERATOR)
+                 .to(Dtype)
+             )
+             cat_ad_lengths_broadcasted = cat_ad_lengths
+-        batch_offsets = torch.tensor([A * b for b in range(B + 1)]).int().cuda()
++        batch_offsets = torch.tensor([A * b for b in range(B + 1)]).int().to(ACCELERATOR)
+         num_ads_in_batch = B * A
+         reordered_batched_ad_lengths = torch.ops.fbgemm.reorder_batched_ad_lengths(
+             cat_ad_lengths, batch_offsets, num_ads_in_batch, broadcast_lengths
+@@ -132,8 +139,10 @@ class ReorderBatchedTest(unittest.TestCase):
+             cat_ad_lengths_broadcasted, reordered_batched_ad_lengths
+         )
+ 
+-    @skipIfRocm
+-    @unittest.skipIf(*gpu_unavailable)
++    # `skipIfRocm` is a decorator factory: applied bare it replaces the test with
++    # its undecorated wrapper, silently discarding `@given` so the body never runs.
++    @skipIfRocm()
++    @unittest.skipIf(*accelerator_unavailable)
+     @given(
+         B=st.integers(min_value=1, max_value=20),
+         T=st.integers(min_value=1, max_value=20),
+@@ -165,7 +174,7 @@ class ReorderBatchedTest(unittest.TestCase):
+                     size=(B * T * L,),
+                 )
+                 .int()
+-                .cuda()
++                .to(ACCELERATOR)
+                 .to(Dtype)
+             )
+             cat_ad_lengths = (
+@@ -174,7 +183,7 @@ class ReorderBatchedTest(unittest.TestCase):
+                     0,
+                 )
+                 .int()
+-                .cuda()
++                .to(ACCELERATOR)
+             )
+             cat_ad_lengths_broadcasted = cat_ad_lengths.tile([A])
+         else:
+@@ -185,7 +194,7 @@ class ReorderBatchedTest(unittest.TestCase):
+                     size=(B * T * A * L,),
+                 )
+                 .int()
+-                .cuda()
++                .to(ACCELERATOR)
+                 .to(Dtype)
+             )
+             cat_ad_lengths = (
+@@ -194,10 +203,10 @@ class ReorderBatchedTest(unittest.TestCase):
+                     0,
+                 )
+                 .int()
+-                .cuda()
++                .to(ACCELERATOR)
+             )
+             cat_ad_lengths_broadcasted = cat_ad_lengths
+-        batch_offsets = torch.tensor([A * b for b in range(B + 1)]).int().cuda()
++        batch_offsets = torch.tensor([A * b for b in range(B + 1)]).int().to(ACCELERATOR)
+         num_ads_in_batch = B * A
+         reordered_cat_ad_lengths = torch.ops.fbgemm.reorder_batched_ad_lengths(
+             cat_ad_lengths, batch_offsets, num_ads_in_batch, broadcast_indices
+@@ -510,7 +519,10 @@ class ReorderBatchedTest(unittest.TestCase):
+             reordered_sequence_embedding_from_indices, reordered_cat_sequence_embeddings
+         )
+ 
+-    @skipIfRocm
++    # `skipIfRocm` is a decorator factory: applied bare it replaces the test with
++    # its undecorated wrapper, silently discarding `@given` so the body never runs.
++    # This op has no XPU kernel, so it stays gated on `gpu_unavailable`.
++    @skipIfRocm()
+     @unittest.skipIf(*gpu_unavailable)
+     @given(
+         B=st.integers(min_value=1, max_value=20),
 -- 
 2.43.0
 
