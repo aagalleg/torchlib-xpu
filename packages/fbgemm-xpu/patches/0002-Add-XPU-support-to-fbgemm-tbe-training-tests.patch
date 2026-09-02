@@ -1,4 +1,4 @@
-From 0d352975cfcf8e72ee8e9873bcc0b56e6c92aab1 Mon Sep 17 00:00:00 2001
+From 5f62c615b84b30a6751c2ad73321950a1ee4ad60 Mon Sep 17 00:00:00 2001
 From: Alberto Gallegos <alberto.gallegos.muro@intel.com>
 Date: Tue, 21 Jul 2026 17:56:36 +0000
 Subject: [PATCH] Add XPU support to FBGEMM TBE training frontend and tests
@@ -9,18 +9,18 @@ Exercise the production constructors in the forward, dense backward, and rowwise
 
 Signed-off-by: Alberto Gallegos <alberto.gallegos.muro@intel.com>
 ---
- ...t_table_batched_embeddings_ops_training.py | 65 +++++++++------
- .../fbgemm_gpu/tbe/config/embedding_config.py | 38 +++++++--
- fbgemm_gpu/fbgemm_gpu/tbe/utils/common.py     | 22 ++---
+ ...t_table_batched_embeddings_ops_training.py | 45 +++++++----
+ .../fbgemm_gpu/tbe/config/embedding_config.py | 11 ++-
+ fbgemm_gpu/fbgemm_gpu/tbe/utils/common.py     |  6 ++
  .../tbe/training/backward_adagrad_common.py   | 71 +++++++++++++---
  .../tbe/training/backward_adagrad_test.py     | 33 +++++---
  .../test/tbe/training/backward_dense_test.py  | 33 ++++++--
  fbgemm_gpu/test/tbe/training/forward_test.py  | 81 +++++++++++++++----
- fbgemm_gpu/test/test_utils.py                 | 33 +++++++-
- 8 files changed, 283 insertions(+), 93 deletions(-)
+ fbgemm_gpu/test/test_utils.py                 | 27 ++++++-
+ 8 files changed, 241 insertions(+), 66 deletions(-)
 
 diff --git a/fbgemm_gpu/fbgemm_gpu/split_table_batched_embeddings_ops_training.py b/fbgemm_gpu/fbgemm_gpu/split_table_batched_embeddings_ops_training.py
-index 688e535..b87d661 100644
+index 688e535..e2a268c 100644
 --- a/fbgemm_gpu/fbgemm_gpu/split_table_batched_embeddings_ops_training.py
 +++ b/fbgemm_gpu/fbgemm_gpu/split_table_batched_embeddings_ops_training.py
 @@ -355,12 +355,7 @@ def apply_split_helper(
@@ -37,26 +37,18 @@ index 688e535..b87d661 100644
 
 
  # pyre-fixme[13]: Attribute `uvm_cache_stats` is never initialized.
-@@ -815,10 +810,12 @@ class SplitTableBatchedEmbeddingBagsCodegen(nn.Module):
-         assert all(
-             cd == compute_devices[0] for cd in compute_devices
-         ), "Heterogenous compute_devices are NOT supported!"
-+        compute_device = compute_devices[0]
-+        use_xpu = compute_device == ComputeDevice.XPU
-         self.use_mtia: bool = compute_devices[0] == ComputeDevice.MTIA
+@@ -819,6 +814,7 @@ class SplitTableBatchedEmbeddingBagsCodegen(nn.Module):
          # Split TBE has different function schemas for CUDA and CPU.
          # For MTIA device type, it uses the CPU one.
--        self.use_cpu: bool = compute_devices[0] == ComputeDevice.CPU or self.use_mtia
-+        self.use_cpu: bool = compute_device == ComputeDevice.CPU or self.use_mtia
+         self.use_cpu: bool = compute_devices[0] == ComputeDevice.CPU or self.use_mtia
++        use_xpu: bool = compute_devices[0] == ComputeDevice.XPU
 
          # Check if init is called from QRSplitTableBatchedEmbeddingBagsCodegen
          self.is_qr_tbe: bool = is_qr_tbe
-@@ -828,7 +825,14 @@ class SplitTableBatchedEmbeddingBagsCodegen(nn.Module):
-         ), "ComputeDevice.CPU is only for EmbeddingLocation.HOST!"
+@@ -829,6 +825,13 @@ class SplitTableBatchedEmbeddingBagsCodegen(nn.Module):
          assert self.use_cpu or all(
              loc != EmbeddingLocation.HOST for loc in locations
--        ), "EmbeddingLocation.HOST doesn't work for CUDA device!"
-+        ), "EmbeddingLocation.HOST doesn't work for accelerator devices!"
+         ), "EmbeddingLocation.HOST doesn't work for CUDA device!"
 +        if use_xpu:
 +            if any(loc != EmbeddingLocation.DEVICE for loc in locations):
 +                raise ValueError("XPU only supports EmbeddingLocation.DEVICE")
@@ -67,7 +59,7 @@ index 688e535..b87d661 100644
          if self.use_cpu or self.pooling_mode == PoolingMode.NONE:
              assert output_dtype in [
                  SparseType.FP32,
-@@ -848,15 +852,28 @@ class SplitTableBatchedEmbeddingBagsCodegen(nn.Module):
+@@ -848,11 +851,16 @@ class SplitTableBatchedEmbeddingBagsCodegen(nn.Module):
              ), "OptimType.NONE does not support mixed embedding dimension"
 
          if device is None:
@@ -77,68 +69,50 @@ index 688e535..b87d661 100644
 -                else torch.device(torch.cuda.current_device())
 -            )
 +            if self.use_cpu:
-+                self.current_device = torch.device("cpu")
-+            else:
-+                accelerator = torch.accelerator.current_accelerator(
-+                    check_available=True
++                self.current_device: torch.device = torch.device("cpu")
++            elif use_xpu:
++                self.current_device: torch.device = torch.device(
++                    f"xpu:{torch.xpu.current_device()}"
 +                )
-+                if accelerator is None:
-+                    raise RuntimeError("No accelerator is available")
-+                self.current_device = accelerator
++            else:
++                self.current_device: torch.device = torch.device(
++                    torch.cuda.current_device()
++                )
          elif isinstance(device, torch.device):
              self.current_device = device
          else:
-             self.current_device = torch.device(device)
-+        if (
-+            not self.use_mtia
-+            and self.current_device.type in ("cpu", "cuda", "xpu")
-+            and ComputeDevice.from_torch_device(self.current_device) != compute_device
-+        ):
-+            raise ValueError(
-+                f"ComputeDevice.{compute_device.name} does not match "
-+                f"device {self.current_device}"
-+            )
-
-         # add placeholder require_grad param tensor to enable autograd with int8 weights
-         self.placeholder_autograd_tensor = nn.Parameter(
-@@ -4642,6 +4659,7 @@ class DenseTableBatchedEmbeddingBagsCodegen(nn.Module):
+@@ -4642,6 +4650,7 @@ class DenseTableBatchedEmbeddingBagsCodegen(nn.Module):
          use_cpu: bool = False,
          output_dtype: SparseType = SparseType.FP32,
          use_mtia: bool = False,
-+        device: str | torch.device | None = None,
++        device: str | int | torch.device | None = None,
      ) -> None:  # noqa C901  # tuple of (rows, dims,)
          super().__init__()
          self.uuid = str(uuid.uuid4())
-@@ -4667,16 +4685,17 @@ class DenseTableBatchedEmbeddingBagsCodegen(nn.Module):
-                 SparseType.BF16,
-             ], "Fused pooled embedding quantization only supported for cuda."
+@@ -4669,12 +4678,16 @@ class DenseTableBatchedEmbeddingBagsCodegen(nn.Module):
 
--        # pyre-fixme[8]: Attribute has type `device`; used as `int | device`.
--        self.current_device: torch.device = (
+         # pyre-fixme[8]: Attribute has type `device`; used as `int | device`.
+         self.current_device: torch.device = (
 -            torch.device("cpu")
 -            if self.use_cpu
--            else (
++            torch.device(device)
++            if device is not None
+             else (
 -                torch.device(f"mtia:{torch.mtia.current_device()}")
 -                if self.use_mtia
 -                else torch.cuda.current_device()
--            )
--        )
-+        if device is not None:
-+            self.current_device = torch.device(device)
-+        elif self.use_cpu:
-+            self.current_device = torch.device("cpu")
-+        elif self.use_mtia:
-+            self.current_device = torch.device(f"mtia:{torch.mtia.current_device()}")
-+        else:
-+            accelerator = torch.accelerator.current_accelerator(check_available=True)
-+            if accelerator is None:
-+                raise RuntimeError("No accelerator is available")
-+            self.current_device = accelerator
++                torch.device("cpu")
++                if self.use_cpu
++                else (
++                    torch.device(f"mtia:{torch.mtia.current_device()}")
++                    if self.use_mtia
++                    else torch.cuda.current_device()
++                )
+             )
+         )
 
-         self.embedding_specs = embedding_specs
-         rows, dims = zip(*embedding_specs)
 diff --git a/fbgemm_gpu/fbgemm_gpu/tbe/config/embedding_config.py b/fbgemm_gpu/fbgemm_gpu/tbe/config/embedding_config.py
-index cadc5d5..38b6e47 100644
+index cadc5d5..6ea7867 100644
 --- a/fbgemm_gpu/fbgemm_gpu/tbe/config/embedding_config.py
 +++ b/fbgemm_gpu/fbgemm_gpu/tbe/config/embedding_config.py
 @@ -72,8 +72,8 @@ class EmbeddingLocation(enum.IntEnum):
@@ -147,8 +121,8 @@ index cadc5d5..38b6e47 100644
          """
 -        # Only support CPU and GPU device
 -        assert device.type == "cpu" or device.type == "cuda"
-+        if device.type not in ("cpu", "cuda", "xpu"):
-+            raise ValueError(f"Unsupported embedding device: {device}")
++        # Only support CPU, CUDA and XPU device
++        assert device.type in ("cpu", "cuda", "xpu")
          if cache_load_factor < 0 or cache_load_factor > 1:
              raise ValueError(
                  f"cache_load_factor must be between 0.0 and 1.0, got {cache_load_factor}"
@@ -163,86 +137,47 @@ index cadc5d5..38b6e47 100644
          # UVM only
          elif cache_load_factor == 0:
              return EmbeddingLocation.MANAGED
-@@ -134,6 +138,20 @@ class ComputeDevice(enum.IntEnum):
+@@ -134,6 +138,7 @@ class ComputeDevice(enum.IntEnum):
      CPU = 0
      CUDA = 1
      MTIA = 2
 +    XPU = 3
-+
-+    @classmethod
-+    def from_torch_device(cls, device: torch.device) -> "ComputeDevice":
-+        device_types = {
-+            "cpu": ComputeDevice.CPU,
-+            "cuda": ComputeDevice.CUDA,
-+            "mtia": ComputeDevice.MTIA,
-+            "xpu": ComputeDevice.XPU,
-+        }
-+        try:
-+            return device_types[device.type]
-+        except KeyError as error:
-+            raise ValueError(f"Unsupported compute device: {device}") from error
 
      @classmethod
      def get_available(cls) -> "ComputeDevice":
-@@ -142,12 +160,16 @@ class ComputeDevice(enum.IntEnum):
-         Formerly the free function get_available_compute_device() in
-         split_table_batched_embeddings_ops_training.py.
-         """
--        if torch.cuda.is_available():
--            return ComputeDevice.CUDA
--        elif torch.mtia.is_available():
--            return ComputeDevice.MTIA
--        else:
--            return ComputeDevice.CPU
-+        accelerator = torch.accelerator.current_accelerator(check_available=True)
-+        return (
-+            ComputeDevice.CPU
-+            if accelerator is None
-+            else {
-+                "cuda": ComputeDevice.CUDA,
-+                "mtia": ComputeDevice.MTIA,
-+                "xpu": ComputeDevice.XPU,
-+            }.get(accelerator.type, ComputeDevice.CPU)
-+        )
+@@ -146,6 +151,8 @@ class ComputeDevice(enum.IntEnum):
+             return ComputeDevice.CUDA
+         elif torch.mtia.is_available():
+             return ComputeDevice.MTIA
++        elif torch.xpu.is_available():
++            return ComputeDevice.XPU
+         else:
+             return ComputeDevice.CPU
 
-
- class EmbeddingSpecInfo(enum.IntEnum):
 diff --git a/fbgemm_gpu/fbgemm_gpu/tbe/utils/common.py b/fbgemm_gpu/fbgemm_gpu/tbe/utils/common.py
-index 5ea148d..a7f2ec8 100644
+index 5ea148d..f9df9f4 100644
 --- a/fbgemm_gpu/fbgemm_gpu/tbe/utils/common.py
 +++ b/fbgemm_gpu/fbgemm_gpu/tbe/utils/common.py
-@@ -20,23 +20,17 @@ def round_up(a: int, b: int) -> int:
+@@ -26,6 +26,9 @@ def get_device() -> torch.device:
+     elif torch.mtia.is_available():
+         # pyre-fixme[7]: Expected `device` but got `Union[int, device]`.
+         return torch.mtia.current_device()
++    elif torch.xpu.is_available():
++        # pyre-fixme[7]: Expected `device` but got `Union[int, device]`.
++        return torch.xpu.current_device()
+     else:
+         return torch.device("cpu")
 
-
- def get_device() -> torch.device:
--    if torch.cuda.is_available():
--        # pyre-fixme[7]: Expected `device` but got `Union[int, device]`.
--        return torch.cuda.current_device()
--    elif torch.mtia.is_available():
--        # pyre-fixme[7]: Expected `device` but got `Union[int, device]`.
--        return torch.mtia.current_device()
--    else:
--        return torch.device("cpu")
-+    accelerator = torch.accelerator.current_accelerator(check_available=True)
-+    return torch.device("cpu") if accelerator is None else accelerator
-
-
- def to_device(t: Deviceable, use_cpu: bool) -> Deviceable:
-     if use_cpu:
+@@ -37,6 +40,9 @@ def to_device(t: Deviceable, use_cpu: bool) -> Deviceable:
+     elif torch.cuda.is_available():
          # pyre-fixme[7]: Expected `Deviceable` but got `Union[Tensor, torch.nn.EmbeddingBag]`.
-         return t.cpu()
--    elif torch.cuda.is_available():
--        # pyre-fixme[7]: Expected `Deviceable` but got `Union[Tensor, torch.nn.EmbeddingBag]`.
--        return t.cuda()
--    else:
--        # pyre-fixme[7]: Expected `Deviceable` but got `Union[Tensor, torch.nn.EmbeddingBag]`.
--        return t.to(device="mtia")
-+
-+    device = torch.accelerator.current_accelerator(check_available=True)
-+    if device is None:
-+        raise RuntimeError("No accelerator is available")
-+    # pyre-fixme[7]: Expected `Deviceable` but got `Union[Tensor, torch.nn.EmbeddingBag]`.
-+    return t.to(device=device)
+         return t.cuda()
++    elif torch.xpu.is_available():
++        # pyre-fixme[7]: Expected `Deviceable` but got `Union[Tensor, torch.nn.EmbeddingBag]`.
++        return t.to(device="xpu")
+     else:
+         # pyre-fixme[7]: Expected `Deviceable` but got `Union[Tensor, torch.nn.EmbeddingBag]`.
+         return t.to(device="mtia")
 diff --git a/fbgemm_gpu/test/tbe/training/backward_adagrad_common.py b/fbgemm_gpu/test/tbe/training/backward_adagrad_common.py
 index 28fc0a4..be0aada 100755
 --- a/fbgemm_gpu/test/tbe/training/backward_adagrad_common.py
@@ -927,7 +862,7 @@ index 0ec9383..af5d631 100644
          self,
          T: int,
 diff --git a/fbgemm_gpu/test/test_utils.py b/fbgemm_gpu/test/test_utils.py
-index 3d17592..7cf27fe 100644
+index 3d17592..0a332b6 100644
 --- a/fbgemm_gpu/test/test_utils.py
 +++ b/fbgemm_gpu/test/test_utils.py
 @@ -21,6 +21,14 @@ import hypothesis.strategies as st
@@ -945,7 +880,7 @@ index 3d17592..7cf27fe 100644
  _suppressed_health_checks: list[HealthCheck] = [
      HealthCheck.filter_too_much,
      HealthCheck.data_too_large,
-@@ -58,6 +66,21 @@ additional_decorators: dict[str, list[Callable[..., Any]]] = {
+@@ -58,6 +66,15 @@ additional_decorators: dict[str, list[Callable[..., Any]]] = {
      ],
  }
 
@@ -954,20 +889,14 @@ index 3d17592..7cf27fe 100644
 +    torch.cuda.is_available() and torch.cuda.device_count() > 0
 +)
 +xpu_available: bool = (
-+    hasattr(torch, "xpu")
-+    and torch.xpu.is_available()
-+    and torch.xpu.device_count() > 0
++    torch.xpu.is_available() and torch.xpu.device_count() > 0
 +)
 +xpu_only: bool = xpu_available and not cuda_available
-+xpu_unavailable: tuple[bool, str] = (
-+    not xpu_available,
-+    "XPU is not available or no XPU devices were detected",
-+)
 +
  # Used for `@unittest.skipIf`
  gpu_unavailable: tuple[bool, str] = (
      not torch.cuda.is_available() or torch.cuda.device_count() == 0,
-@@ -81,7 +104,7 @@ def current_accelerator() -> torch.device | None:
+@@ -81,7 +98,7 @@ def current_accelerator() -> torch.device | None:
      return torch.accelerator.current_accelerator() if accelerator_available else None
 
 
@@ -976,7 +905,7 @@ index 3d17592..7cf27fe 100644
 
  # Used for `@unittest.skipIf` for tests that pass in internal CI, but fail on the GitHub runners
  running_on_github: tuple[bool, str] = (
-@@ -280,6 +303,14 @@ def use_cpu_strategy() -> st.SearchStrategy[bool]:
+@@ -280,6 +297,14 @@ def use_cpu_strategy() -> st.SearchStrategy[bool]:
      )
 
 
