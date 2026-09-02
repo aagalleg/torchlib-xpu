@@ -14,32 +14,31 @@
 //   File: fbgemm_gpu/src/sparse_ops/sparse_reorder_batched_ad.cu
 //
 // KERNEL MAPPING:
-//   ReorderBatchedAdLengthsKernel<scalar_t>
+//   ReorderBatchedAdLengthsKernel<Dtype>
 //     → reorder_batched_ad_lengths_kernel (CUDA)
 //
-//   NarrowBroadcastIndicesKernel<scalar_t, index_t>
+//   NarrowBroadcastIndicesKernel<Dtype, index_t>
 //     → narrow_broadcast_indices_kernel (CUDA)
 //
-//   NarrowBatchedBroadcastIndicesKernel<scalar_t, index_t>
+//   NarrowBatchedBroadcastIndicesKernel<Dtype, index_t>
 //     → narrow_batched_broadcast_indices_kernel (CUDA)
 //
-//   ReorderBatchedAdIndicesKernel<scalar_t, index_t>
+//   ReorderBatchedAdIndicesKernel<Dtype, index_t>
 //     → reorder_batched_ad_indices_kernel (CUDA)
 //
 // HOST FUNCTION MAPPING:
 //   reorder_batched_ad_lengths_xpu (SYCL)
-//     → reorder_batched_ad_lengths_cuda (CUDA)
+//     → reorder_batched_ad_lengths_gpu (CUDA)
+//     CUDA File: fbgemm_gpu/src/sparse_ops/sparse_reorder_batched_ad.cu
 //
 //   reorder_batched_ad_indices_xpu (SYCL)
-//     → reorder_batched_ad_indices_cuda (CUDA)
+//     → reorder_batched_ad_indices_gpu (CUDA)
+//     CUDA File: fbgemm_gpu/src/sparse_ops/sparse_reorder_batched_ad.cu
 //
 // DESCRIPTION:
 //   Reorders batched AD (advertisement) lengths and indices from ragged
 //   [B x T x #num_ads_b] layout to [T][B][#num_ads_b] layout for efficient
 //   embedding lookups. Supports broadcast modes for lengths and indices.
-//
-//   The kernels are plain SYCL functors submitted through the PyTorch XPU
-//   stream queue, so this file does not depend on the comm/ helper directory.
 //
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -55,8 +54,8 @@
 #include <ATen/native/StridedRandomAccessor.h>
 #include <torch/library.h>
 
-#include "../fbgemm_utils/utils.h"
-#include "../fbgemm_utils/tensor_utils.h"
+#include "fbgemm_utils/tensor_utils.h"
+#include "fbgemm_utils/utils.h"
 
 using at::native::RestrictPtrTraits;
 
@@ -72,7 +71,7 @@ namespace fbgemm_xpu {
 //
 // CUDA SOURCE MAPPING:
 //   CUDA Kernel: reorder_batched_ad_lengths_kernel
-//   CUDA File: fbgemm_gpu/src/sparse_ops/sparse_reorder.cu
+//   CUDA File: fbgemm_gpu/src/sparse_ops/sparse_reorder_batched_ad.cu
 //
 // DESCRIPTION:
 //   Reorders AD lengths from ragged [B x T x #num_ads_b] to [T][B][#num_ads_b].
@@ -80,15 +79,25 @@ namespace fbgemm_xpu {
 //   Supports broadcast mode where a single length is replicated for all ads.
 //
 ////////////////////////////////////////////////////////////////////////////////
-template <typename scalar_t>
+
+/**
+ * @brief SYCL kernel functor for reordering AD lengths
+ *
+ * Warp-per-segment decomposition: each warp handles one (batch, table) pair and
+ * copies the `num_ads_b` lengths of that segment to its reordered position.
+ *
+ * When `broadcast_lengths` is true a single input length is replicated across
+ * all ads of the batch.
+ */
+template <typename Dtype>
 class ReorderBatchedAdLengthsKernel {
 public:
     ReorderBatchedAdLengthsKernel(
-            at::GenericPackedTensorAccessor<scalar_t, 1, RestrictPtrTraits, int32_t>
+            at::PackedTensorAccessor32<Dtype, 1, RestrictPtrTraits>
                     cat_ad_lengths,
-            at::GenericPackedTensorAccessor<int32_t, 1, RestrictPtrTraits, int32_t>
+            at::PackedTensorAccessor32<int32_t, 1, RestrictPtrTraits>
                     batch_offsets,
-            at::GenericPackedTensorAccessor<scalar_t, 1, RestrictPtrTraits, int32_t>
+            at::PackedTensorAccessor32<Dtype, 1, RestrictPtrTraits>
                     reordered_cat_ad_lengths,
             int32_t T,
             bool broadcast_lengths)
@@ -101,12 +110,12 @@ public:
     void operator()(const sycl::nd_item<2>& item) const;
 
 private:
-    at::GenericPackedTensorAccessor<scalar_t, 1, RestrictPtrTraits, int32_t>
+    at::PackedTensorAccessor32<Dtype, 1, RestrictPtrTraits>
             cat_ad_lengths_;
-    at::GenericPackedTensorAccessor<int32_t, 1, RestrictPtrTraits, int32_t>
+    at::PackedTensorAccessor32<int32_t, 1, RestrictPtrTraits>
             batch_offsets_;
     // Written by the kernel, so it must stay assignable inside operator() const.
-    mutable at::GenericPackedTensorAccessor<scalar_t, 1, RestrictPtrTraits, int32_t>
+    mutable at::PackedTensorAccessor32<Dtype, 1, RestrictPtrTraits>
             reordered_cat_ad_lengths_;
     int32_t T_;
     bool broadcast_lengths_;
@@ -118,46 +127,54 @@ private:
 //
 // CUDA SOURCE MAPPING:
 //   CUDA Kernel: narrow_broadcast_indices_kernel
-//   CUDA File: fbgemm_gpu/src/sparse_ops/sparse_reorder.cu
+//   CUDA File: fbgemm_gpu/src/sparse_ops/sparse_reorder_batched_ad.cu
 //
 // DESCRIPTION:
-//   Optimized kernel for B=1 broadcast case. Each warp copies one ad segment
-//   and broadcasts it to all output positions. Uses table-major iteration.
+//   Optimized kernel for the B=1 broadcast case. One warp is assigned to each
+//   (table, ad) pair: it reads the single input segment of that table and
+//   writes a copy of it into that ad's output slot.
 //
 ////////////////////////////////////////////////////////////////////////////////
-template <typename scalar_t, typename index_t = int32_t>
+
+/**
+ * @brief SYCL kernel functor for the B=1 broadcast fast path
+ *
+ * One warp per (table, ad) pair. Each warp copies the table's single input
+ * segment into one output ad slot, so the segment ends up replicated across all
+ * `num_ads_in_batch` slots of that table.
+ *
+ * Selected only when `broadcast_indices` is true, `T <= 320` and `B == 1`.
+ */
+template <typename Dtype, typename index_t = int32_t>
 class NarrowBroadcastIndicesKernel {
 public:
     NarrowBroadcastIndicesKernel(
-            at::GenericPackedTensorAccessor<index_t, 1, RestrictPtrTraits, int32_t>
+            at::PackedTensorAccessor32<index_t, 1, RestrictPtrTraits>
                     cat_ad_offsets,
-            at::GenericPackedTensorAccessor<scalar_t, 1, RestrictPtrTraits, int32_t>
+            at::PackedTensorAccessor32<Dtype, 1, RestrictPtrTraits>
                     cat_ad_indices,
-            at::GenericPackedTensorAccessor<scalar_t, 1, RestrictPtrTraits, int32_t>
+            at::PackedTensorAccessor32<Dtype, 1, RestrictPtrTraits>
                     reordered_cat_ad_indices,
             int num_ads_in_batch,
-            int reordered_cat_ad_batches,
-            int sub_group_size)
+            int reordered_cat_ad_batches)
         : cat_ad_offsets_(cat_ad_offsets),
           cat_ad_indices_(cat_ad_indices),
           reordered_cat_ad_indices_(reordered_cat_ad_indices),
           num_ads_in_batch_(num_ads_in_batch),
-          reordered_cat_ad_batches_(reordered_cat_ad_batches),
-          sub_group_size_(sub_group_size) {}
+          reordered_cat_ad_batches_(reordered_cat_ad_batches) {}
 
     void operator()(const sycl::nd_item<1>& item) const;
 
 private:
-    at::GenericPackedTensorAccessor<index_t, 1, RestrictPtrTraits, int32_t>
+    at::PackedTensorAccessor32<index_t, 1, RestrictPtrTraits>
             cat_ad_offsets_;
-    at::GenericPackedTensorAccessor<scalar_t, 1, RestrictPtrTraits, int32_t>
+    at::PackedTensorAccessor32<Dtype, 1, RestrictPtrTraits>
             cat_ad_indices_;
     // Written by the kernel, so it must stay assignable inside operator() const.
-    mutable at::GenericPackedTensorAccessor<scalar_t, 1, RestrictPtrTraits, int32_t>
+    mutable at::PackedTensorAccessor32<Dtype, 1, RestrictPtrTraits>
             reordered_cat_ad_indices_;
     int num_ads_in_batch_;
     int reordered_cat_ad_batches_;
-    int sub_group_size_;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -166,54 +183,63 @@ private:
 //
 // CUDA SOURCE MAPPING:
 //   CUDA Kernel: narrow_batched_broadcast_indices_kernel
-//   CUDA File: fbgemm_gpu/src/sparse_ops/sparse_reorder.cu
+//   CUDA File: fbgemm_gpu/src/sparse_ops/sparse_reorder_batched_ad.cu
 //
 // DESCRIPTION:
-//   Optimized kernel for 1 < B < 64 broadcast case. Each warp handles one
-//   (table, batch) pair and broadcasts indices from first batch to all ads
-//   in that batch. More complex warp assignment than B=1 case.
+//   Optimized kernel for the 1 < B < 64 broadcast case. The warps of a table
+//   are split evenly across the batches (`num_ads_in_batch / B` warps per
+//   batch), and those warps stride over the ads of their batch, each copying
+//   the batch's single input segment into one ad slot.
 //
 ////////////////////////////////////////////////////////////////////////////////
-template <typename scalar_t, typename index_t = int32_t>
+
+/**
+ * @brief SYCL kernel functor for the 1 < B < 64 broadcast fast path
+ *
+ * The `num_ads_in_batch` warps of a table are split evenly across the batches,
+ * so `num_ads_in_batch / B` warps cooperate on each (table, batch) pair and
+ * stride over that batch's ads. Each warp copies the single input segment of
+ * its (batch, table) into the ad slot it is responsible for.
+ *
+ * Selected when `broadcast_indices` is true, `T <= 320` and `1 < B < 64`.
+ */
+template <typename Dtype, typename index_t = int32_t>
 class NarrowBatchedBroadcastIndicesKernel {
 public:
     NarrowBatchedBroadcastIndicesKernel(
-            at::GenericPackedTensorAccessor<index_t, 1, RestrictPtrTraits, int32_t>
+            at::PackedTensorAccessor32<index_t, 1, RestrictPtrTraits>
                     cat_ad_offsets,
-            at::GenericPackedTensorAccessor<scalar_t, 1, RestrictPtrTraits, int32_t>
+            at::PackedTensorAccessor32<Dtype, 1, RestrictPtrTraits>
                     cat_ad_indices,
-            at::GenericPackedTensorAccessor<index_t, 1, RestrictPtrTraits, int32_t>
+            at::PackedTensorAccessor32<index_t, 1, RestrictPtrTraits>
                     reordered_cat_ad_offsets,
-            at::GenericPackedTensorAccessor<scalar_t, 1, RestrictPtrTraits, int32_t>
+            at::PackedTensorAccessor32<Dtype, 1, RestrictPtrTraits>
                     reordered_cat_ad_indices,
-            at::GenericPackedTensorAccessor<int32_t, 1, RestrictPtrTraits, int32_t>
+            at::PackedTensorAccessor32<int32_t, 1, RestrictPtrTraits>
                     batch_offsets,
-            int32_t T,
-            int sub_group_size)
+            int32_t T)
         : cat_ad_offsets_(cat_ad_offsets),
           cat_ad_indices_(cat_ad_indices),
           reordered_cat_ad_offsets_(reordered_cat_ad_offsets),
           reordered_cat_ad_indices_(reordered_cat_ad_indices),
           batch_offsets_(batch_offsets),
-          T_(T),
-          sub_group_size_(sub_group_size) {}
+          T_(T) {}
 
     void operator()(const sycl::nd_item<1>& item) const;
 
 private:
-    at::GenericPackedTensorAccessor<index_t, 1, RestrictPtrTraits, int32_t>
+    at::PackedTensorAccessor32<index_t, 1, RestrictPtrTraits>
             cat_ad_offsets_;
-    at::GenericPackedTensorAccessor<scalar_t, 1, RestrictPtrTraits, int32_t>
+    at::PackedTensorAccessor32<Dtype, 1, RestrictPtrTraits>
             cat_ad_indices_;
-    at::GenericPackedTensorAccessor<index_t, 1, RestrictPtrTraits, int32_t>
+    at::PackedTensorAccessor32<index_t, 1, RestrictPtrTraits>
             reordered_cat_ad_offsets_;
     // Written by the kernel, so it must stay assignable inside operator() const.
-    mutable at::GenericPackedTensorAccessor<scalar_t, 1, RestrictPtrTraits, int32_t>
+    mutable at::PackedTensorAccessor32<Dtype, 1, RestrictPtrTraits>
             reordered_cat_ad_indices_;
-    at::GenericPackedTensorAccessor<int32_t, 1, RestrictPtrTraits, int32_t>
+    at::PackedTensorAccessor32<int32_t, 1, RestrictPtrTraits>
             batch_offsets_;
     int32_t T_;
-    int sub_group_size_;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -222,7 +248,7 @@ private:
 //
 // CUDA SOURCE MAPPING:
 //   CUDA Kernel: reorder_batched_ad_indices_kernel
-//   CUDA File: fbgemm_gpu/src/sparse_ops/sparse_reorder.cu
+//   CUDA File: fbgemm_gpu/src/sparse_ops/sparse_reorder_batched_ad.cu
 //
 // DESCRIPTION:
 //   General kernel for reordering indices from [B x T x #num_ads_b x L] to
@@ -231,19 +257,28 @@ private:
 //   and non-broadcast modes.
 //
 ////////////////////////////////////////////////////////////////////////////////
-template <typename scalar_t, typename index_t = int32_t>
+
+/**
+ * @brief SYCL kernel functor for reordering AD indices (general case)
+ *
+ * Warp-per-segment decomposition: each warp handles one (batch, table) pair and
+ * copies the indices of every ad in that segment. Handles both broadcast and
+ * non-broadcast modes, and is the fallback for shapes the narrow kernels above
+ * do not cover.
+ */
+template <typename Dtype, typename index_t = int32_t>
 class ReorderBatchedAdIndicesKernel {
 public:
     ReorderBatchedAdIndicesKernel(
-            at::GenericPackedTensorAccessor<index_t, 1, RestrictPtrTraits, int32_t>
+            at::PackedTensorAccessor32<index_t, 1, RestrictPtrTraits>
                     cat_ad_offsets,
-            at::GenericPackedTensorAccessor<scalar_t, 1, RestrictPtrTraits, int32_t>
+            at::PackedTensorAccessor32<Dtype, 1, RestrictPtrTraits>
                     cat_ad_indices,
-            at::GenericPackedTensorAccessor<index_t, 1, RestrictPtrTraits, int32_t>
+            at::PackedTensorAccessor32<index_t, 1, RestrictPtrTraits>
                     reordered_cat_ad_offsets,
-            at::GenericPackedTensorAccessor<scalar_t, 1, RestrictPtrTraits, int32_t>
+            at::PackedTensorAccessor32<Dtype, 1, RestrictPtrTraits>
                     reordered_cat_ad_indices,
-            at::GenericPackedTensorAccessor<int32_t, 1, RestrictPtrTraits, int32_t>
+            at::PackedTensorAccessor32<int32_t, 1, RestrictPtrTraits>
                     batch_offsets,
             int32_t T,
             bool broadcast_indices)
@@ -258,74 +293,98 @@ public:
     void operator()(const sycl::nd_item<2>& item) const;
 
 private:
-    at::GenericPackedTensorAccessor<index_t, 1, RestrictPtrTraits, int32_t>
+    at::PackedTensorAccessor32<index_t, 1, RestrictPtrTraits>
             cat_ad_offsets_;
-    at::GenericPackedTensorAccessor<scalar_t, 1, RestrictPtrTraits, int32_t>
+    at::PackedTensorAccessor32<Dtype, 1, RestrictPtrTraits>
             cat_ad_indices_;
-    at::GenericPackedTensorAccessor<index_t, 1, RestrictPtrTraits, int32_t>
+    at::PackedTensorAccessor32<index_t, 1, RestrictPtrTraits>
             reordered_cat_ad_offsets_;
     // Written by the kernel, so it must stay assignable inside operator() const.
-    mutable at::GenericPackedTensorAccessor<scalar_t, 1, RestrictPtrTraits, int32_t>
+    mutable at::PackedTensorAccessor32<Dtype, 1, RestrictPtrTraits>
             reordered_cat_ad_indices_;
-    at::GenericPackedTensorAccessor<int32_t, 1, RestrictPtrTraits, int32_t>
+    at::PackedTensorAccessor32<int32_t, 1, RestrictPtrTraits>
             batch_offsets_;
     int32_t T_;
     bool broadcast_indices_;
 };
 
 // ============================================================================
-// Kernel Functions
+// Host Function Declarations
 // ============================================================================
 
-/**
- * @brief Reorder batched AD lengths from [B x T x #num_ads_b] to [T][B][#num_ads_b]
- * 
- * Kernel function to reorder advertisement lengths tensor according to a new layout
- * that groups by table first, then batch. Supports broadcast mode where all ads
- * in a batch share the same length.
- * 
- * @param cat_ad_lengths Input lengths tensor [B x T x #num_ads_b] (ragged)
- * @param batch_offsets Batch offset indices [B+1]
- * @param reordered_cat_ad_lengths Output reordered lengths [T x sum(#num_ads_b)]
- * @param T Number of tables/features
- * @param broadcast_lengths If true, broadcast first length to all ads in batch
- * @param grid_size Number of workgroups for kernel launch
- */
-void reorder_batched_ad_lengths_kernel_xpu(
-    const at::Tensor& cat_ad_lengths,
-    const at::Tensor& batch_offsets,
-    at::Tensor& reordered_cat_ad_lengths,
-    const int32_t T,
-    const bool broadcast_lengths,
-    const int32_t grid_size);
+////////////////////////////////////////////////////////////////////////////////
+// reorder_batched_ad_lengths_xpu - Host Function
+////////////////////////////////////////////////////////////////////////////////
+//
+// CUDA SOURCE MAPPING:
+//   CUDA Function: reorder_batched_ad_lengths_gpu
+//   CUDA File: fbgemm_gpu/src/sparse_ops/sparse_reorder_batched_ad.cu
+//   CUDA Header: fbgemm_gpu/include/fbgemm_gpu/sparse_ops.h
+//
+// DESCRIPTION:
+//   Host function that reorders the AD lengths tensor to the table-major
+//   layout and launches ReorderBatchedAdLengthsKernel.
+//
+////////////////////////////////////////////////////////////////////////////////
 
 /**
- * @brief Reorder batched AD indices from [B x T x #num_ads_b x L] to [T][B][#num_ads_b][L]
- * 
- * Kernel function to reorder advertisement indices tensor according to a new layout
- * that groups by table first, then batch. Supports broadcast mode where indices
- * from first batch are replicated across all batches.
- * 
+ * @brief XPU implementation of reorder_batched_ad_lengths
+ *
+ * Reorders AD lengths from [B x T x #num_ads_b] to [T][B][#num_ads_b].
+ *
+ * @param cat_ad_lengths Input lengths tensor [B x T x #num_ads_b] (ragged)
+ * @param batch_offsets Batch offset indices [B+1]
+ * @param num_ads_in_batch Total number of ads across all batches
+ * @param broadcast_lengths If true, broadcast one length to all ads in a batch
+ * @param max_batch_size Unused on XPU; must be <= 0
+ * @return Reordered lengths [T x num_ads_in_batch]
+ */
+at::Tensor reorder_batched_ad_lengths_xpu(
+    const at::Tensor& cat_ad_lengths,
+    const at::Tensor& batch_offsets,
+    const int64_t num_ads_in_batch,
+    const bool broadcast_lengths,
+    const int64_t max_batch_size);
+
+////////////////////////////////////////////////////////////////////////////////
+// reorder_batched_ad_indices_xpu - Host Function
+////////////////////////////////////////////////////////////////////////////////
+//
+// CUDA SOURCE MAPPING:
+//   CUDA Function: reorder_batched_ad_indices_gpu
+//   CUDA File: fbgemm_gpu/src/sparse_ops/sparse_reorder_batched_ad.cu
+//   CUDA Header: fbgemm_gpu/include/fbgemm_gpu/sparse_ops.h
+//
+// DESCRIPTION:
+//   Host function that reorders the AD indices tensor to the table-major
+//   layout. Mirrors the CUDA dispatch logic: the narrow broadcast kernels are
+//   selected for `broadcast_indices && T <= 320 && B < 64`, otherwise the
+//   general ReorderBatchedAdIndicesKernel is launched.
+//
+////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * @brief XPU implementation of reorder_batched_ad_indices
+ *
+ * Reorders AD indices from [B x T x #num_ads_b x L] to [T][B][#num_ads_b][L].
+ *
  * @param cat_ad_offsets Input offset indices [B x T x #num_ads_b + 1] (ragged)
  * @param cat_ad_indices Input indices tensor [sum(L)]
- * @param reordered_cat_ad_offsets Output offset indices [T x sum(#num_ads_b) + 1]
+ * @param reordered_cat_ad_offsets Output offset indices [T x num_ads_in_batch + 1]
  * @param batch_offsets Batch offset indices [B+1]
- * @param reordered_cat_ad_indices Output reordered indices [sum(L)]
  * @param num_ads_in_batch Total number of ads across all batches
- * @param B Batch size
- * @param T Number of tables/features
- * @param broadcast_indices If true, broadcast first batch indices to all batches
+ * @param broadcast_indices If true, broadcast the first ad indices to all ads
+ * @param num_indices_after_broadcast Output size when broadcasting; required
+ *        to be >= 0 in that case
+ * @return Reordered indices
  */
-void reorder_batched_ad_indices_kernel_xpu(
+at::Tensor reorder_batched_ad_indices_xpu(
     const at::Tensor& cat_ad_offsets,
     const at::Tensor& cat_ad_indices,
     const at::Tensor& reordered_cat_ad_offsets,
     const at::Tensor& batch_offsets,
-    at::Tensor& reordered_cat_ad_indices,
     const int64_t num_ads_in_batch,
-    const int64_t B,
-    const int64_t T,
-    const bool broadcast_indices);
-
+    const bool broadcast_indices,
+    const int64_t num_indices_after_broadcast);
 
 } // namespace fbgemm_xpu
