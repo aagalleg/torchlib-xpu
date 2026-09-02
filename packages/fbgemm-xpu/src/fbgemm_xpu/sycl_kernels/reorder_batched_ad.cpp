@@ -47,6 +47,9 @@
 //   ReorderBatchedAdIndicesKernel::operator()
 //     → reorder_batched_ad_indices_kernel (CUDA)
 //
+//   ReorderBatchedAdIndicesVecKernel::operator()
+//     → reorder_batched_ad_indices_kernel_vec (CUDA)
+//
 // HOST FUNCTIONS:
 //   reorder_batched_ad_lengths_xpu
 //     → reorder_batched_ad_lengths_gpu (CUDA)
@@ -59,6 +62,8 @@
 #include "reorder_batched_ad.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <type_traits>
 
 #include <ATen/xpu/XPUContext.h>
 #include <c10/xpu/XPUFunctions.h>
@@ -220,6 +225,142 @@ void ReorderBatchedAdIndicesKernel<Dtype, index_t>::operator()(
                       i += item.get_local_range(1)) {
                 reordered_cat_ad_indices_[output_segment_start + i] =
                         cat_ad_indices_[input_segment_start + i];
+            }
+        }
+    }
+}
+
+/**
+ * @brief ReorderBatchedAdIndicesVecKernel operator implementation
+ *
+ * Structural mirror of the CUDA reorder_batched_ad_indices_kernel_vec: same
+ * branch layout (<=64 or non-4/8-byte dtype -> scalar, <=128 -> vec2,
+ * >128 -> vec4), same alignment gate with a duplicated scalar fallback, and
+ * the same tail handling.
+ *
+ * Two mechanical differences follow from SYCL rather than from the algorithm:
+ *   - CUDA's threadIdx.x is the fastest-varying axis, SYCL's is the *last*
+ *     nd_item dimension, so blockDim.y/threadIdx.y map to dimension 0 and
+ *     blockDim.x/threadIdx.x to dimension 1.
+ *   - sycl::long4 is naturally aligned to 32 bytes whereas CUDA's long4 is
+ *     declared __align__(16), so the vec4 gate is stricter here for 8-byte
+ *     dtypes. That only ever diverts a segment to the scalar fallback.
+ */
+template <typename Dtype, typename index_t>
+void ReorderBatchedAdIndicesVecKernel<Dtype, index_t>::operator()(
+        const sycl::nd_item<2>& item) const {
+    using vec2_t =
+            std::conditional_t<sizeof(Dtype) == 8, sycl::long2, sycl::float2>;
+    using vec4_t =
+            std::conditional_t<sizeof(Dtype) == 8, sycl::long4, sycl::float4>;
+    const int32_t B = batch_offsets_.size(0) - 1;
+    const int32_t num_ads_in_batch = batch_offsets_[B];
+    const int64_t BT = static_cast<int64_t>(B) * T_;
+    // warp-per-segment with grid-stride loop. A capped grid (used to stay
+    // inside DPC++'s int32 work-item id limit) still covers all B*T segments.
+    const size_t b_t_init =
+            item.get_group(0) * item.get_local_range(0) + item.get_local_id(0);
+    const size_t stride = item.get_group_range(0) * item.get_local_range(0);
+    // CUDA threadIdx.x / blockDim.x.
+    const size_t tid = item.get_local_id(1);
+    const size_t nthreads = item.get_local_range(1);
+
+    for (size_t b_t = b_t_init; b_t < static_cast<size_t>(BT); b_t += stride) {
+        const int32_t b = static_cast<int32_t>(b_t % B);
+        const int32_t t = static_cast<int32_t>(b_t / B);
+
+        const auto num_ads_b = batch_offsets_[b + 1] - batch_offsets_[b];
+        const auto output_segment_offset_start =
+                t * num_ads_in_batch + batch_offsets_[b];
+        const auto output_segment_start =
+                reordered_cat_ad_offsets_[output_segment_offset_start];
+        const int32_t input_segment_offset_start =
+                broadcast_indices_ ? T_ * b + t : T_ * batch_offsets_[b] + t * num_ads_b;
+        const int32_t input_segment_offset_end = broadcast_indices_
+                ? input_segment_offset_start + 1
+                : input_segment_offset_start + num_ads_b;
+        const auto input_segment_start = cat_ad_offsets_[input_segment_offset_start];
+        const auto input_segment_end = cat_ad_offsets_[input_segment_offset_end];
+        const auto num_elements = input_segment_end - input_segment_start;
+
+        Dtype* dst_ptr = &reordered_cat_ad_indices_[output_segment_start];
+        const Dtype* src_ptr = &cat_ad_indices_[input_segment_start];
+        if (broadcast_indices_) {
+            for (auto i = tid; i < static_cast<size_t>(num_ads_b * num_elements);
+                      i += nthreads) {
+                reordered_cat_ad_indices_[output_segment_start + i] =
+                        cat_ad_indices_[input_segment_start + i % num_elements];
+            }
+        } else {
+            // Idea: we want to copy the entire segment of size sum_a(length_{b, t,
+            // a}) from starting point (given by cat_ad_offsets[b, t]) to end point
+            // (given by reordered_cat_ad_indices[t][b])
+            if (num_elements <= 64 || !(sizeof(Dtype) == 4 || sizeof(Dtype) == 8)) {
+                for (auto i = tid;
+                          i < static_cast<size_t>(input_segment_end - input_segment_start);
+                          i += nthreads) {
+                    // coalesced global memory access, can be optimized through ILP
+                    // with the help of shared memory or vector load/store (if
+                    // num_ads_b>=64)
+                    reordered_cat_ad_indices_[output_segment_start + i] =
+                            cat_ad_indices_[input_segment_start + i];
+                }
+            } else if (num_elements > 64 && num_elements <= 128) {
+                // Check alignment for vec2_t
+                bool vec2_t_aligned =
+                        reinterpret_cast<uintptr_t>(dst_ptr) % alignof(vec2_t) == 0 &&
+                        reinterpret_cast<uintptr_t>(src_ptr) % alignof(vec2_t) == 0;
+                if (vec2_t_aligned) {
+                    // Use vectorized loads if properly aligned
+                    auto dst = reinterpret_cast<vec2_t*>(dst_ptr);
+                    auto src = reinterpret_cast<const vec2_t*>(src_ptr);
+                    for (auto i = tid; i < static_cast<size_t>(num_elements / 2);
+                              i += nthreads) {
+                        dst[i] = src[i];
+                    }
+                    // Upstream hardcodes lane 31 here; the launch geometry gives
+                    // this dimension exactly kThreadGroupSize work-items, so the
+                    // last one is used instead of assuming a literal 31.
+                    if ((num_elements % 2) && tid == nthreads - 1) {
+                        reordered_cat_ad_indices_[output_segment_start + num_elements - 1] =
+                                cat_ad_indices_[input_segment_start + num_elements - 1];
+                    }
+                } else {
+                    // Fall back to scalar loads if misaligned
+                    for (auto i = tid; i < static_cast<size_t>(num_elements);
+                              i += nthreads) {
+                        reordered_cat_ad_indices_[output_segment_start + i] =
+                                cat_ad_indices_[input_segment_start + i];
+                    }
+                }
+            } else if (num_elements > 128) {
+                // Check alignment for vec4_t
+                bool vec4_t_aligned =
+                        reinterpret_cast<uintptr_t>(dst_ptr) % alignof(vec4_t) == 0 &&
+                        reinterpret_cast<uintptr_t>(src_ptr) % alignof(vec4_t) == 0;
+                if (vec4_t_aligned) {
+                    // Use vectorized loads if properly aligned
+                    auto dst = reinterpret_cast<vec4_t*>(dst_ptr);
+                    auto src = reinterpret_cast<const vec4_t*>(src_ptr);
+                    for (auto i = tid; i < static_cast<size_t>(num_elements / 4);
+                              i += nthreads) {
+                        dst[i] = src[i];
+                    }
+                    size_t remainder = static_cast<size_t>(num_elements % 4);
+                    if (remainder && tid < remainder) {
+                        reordered_cat_ad_indices_
+                                [output_segment_start + num_elements - tid - 1] =
+                                        cat_ad_indices_
+                                                [input_segment_start + num_elements - tid - 1];
+                    }
+                } else {
+                    // Fall back to scalar loads if misaligned
+                    for (auto i = tid; i < static_cast<size_t>(num_elements);
+                              i += nthreads) {
+                        reordered_cat_ad_indices_[output_segment_start + i] =
+                                cat_ad_indices_[input_segment_start + i];
+                    }
+                }
             }
         }
     }
@@ -474,14 +615,17 @@ at::Tensor reorder_batched_ad_indices_xpu(
                                     xpu_calc_xblock_count(B * T, kNumWarps),
                                     static_cast<int64_t>(kNumWarps) * global_dim_y);
                             const uint32_t global_dim_x = num_groups * kNumWarps;
+                            // Upstream launches the vectorized kernel for this
+                            // path; it falls back to a scalar copy internally
+                            // for short, misaligned or non-4/8-byte segments.
                             queue.submit([&](sycl::handler& cgh) {
-                                cgh.parallel_for<ReorderBatchedAdIndicesKernel<
+                                cgh.parallel_for<ReorderBatchedAdIndicesVecKernel<
                                         scalar_t,
                                         index_t>>(
                                         sycl::nd_range<2>(
                                                 sycl::range<2>(global_dim_x, global_dim_y),
                                                 sycl::range<2>(kNumWarps, global_dim_y)),
-                                        ReorderBatchedAdIndicesKernel<scalar_t, index_t>(
+                                        ReorderBatchedAdIndicesVecKernel<scalar_t, index_t>(
                                                 cat_ad_offsets.packed_accessor32<
                                                         index_t,
                                                         1,

@@ -26,6 +26,9 @@
 //   ReorderBatchedAdIndicesKernel<Dtype, index_t>
 //     → reorder_batched_ad_indices_kernel (CUDA)
 //
+//   ReorderBatchedAdIndicesVecKernel<Dtype, index_t>
+//     → reorder_batched_ad_indices_kernel_vec (CUDA)
+//
 // HOST FUNCTION MAPPING:
 //   reorder_batched_ad_lengths_xpu (SYCL)
 //     → reorder_batched_ad_lengths_gpu (CUDA)
@@ -50,6 +53,8 @@
 
 #include <ATen/ATen.h>
 #include <ATen/DeviceGuard.h>
+#include <ATen/xpu/XPUContext.h>
+#include <c10/xpu/XPUFunctions.h>
 #include <ATen/native/xpu/sycl/KernelUtils.h>
 #include <ATen/native/StridedRandomAccessor.h>
 #include <torch/library.h>
@@ -270,6 +275,74 @@ template <typename Dtype, typename index_t = int32_t>
 class ReorderBatchedAdIndicesKernel {
 public:
     ReorderBatchedAdIndicesKernel(
+            at::PackedTensorAccessor32<index_t, 1, RestrictPtrTraits>
+                    cat_ad_offsets,
+            at::PackedTensorAccessor32<Dtype, 1, RestrictPtrTraits>
+                    cat_ad_indices,
+            at::PackedTensorAccessor32<index_t, 1, RestrictPtrTraits>
+                    reordered_cat_ad_offsets,
+            at::PackedTensorAccessor32<Dtype, 1, RestrictPtrTraits>
+                    reordered_cat_ad_indices,
+            at::PackedTensorAccessor32<int32_t, 1, RestrictPtrTraits>
+                    batch_offsets,
+            int32_t T,
+            bool broadcast_indices)
+        : cat_ad_offsets_(cat_ad_offsets),
+          cat_ad_indices_(cat_ad_indices),
+          reordered_cat_ad_offsets_(reordered_cat_ad_offsets),
+          reordered_cat_ad_indices_(reordered_cat_ad_indices),
+          batch_offsets_(batch_offsets),
+          T_(T),
+          broadcast_indices_(broadcast_indices) {}
+
+    void operator()(const sycl::nd_item<2>& item) const;
+
+private:
+    at::PackedTensorAccessor32<index_t, 1, RestrictPtrTraits>
+            cat_ad_offsets_;
+    at::PackedTensorAccessor32<Dtype, 1, RestrictPtrTraits>
+            cat_ad_indices_;
+    at::PackedTensorAccessor32<index_t, 1, RestrictPtrTraits>
+            reordered_cat_ad_offsets_;
+    // Written by the kernel, so it must stay assignable inside operator() const.
+    mutable at::PackedTensorAccessor32<Dtype, 1, RestrictPtrTraits>
+            reordered_cat_ad_indices_;
+    at::PackedTensorAccessor32<int32_t, 1, RestrictPtrTraits>
+            batch_offsets_;
+    int32_t T_;
+    bool broadcast_indices_;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// ReorderBatchedAdIndicesVecKernel - Device Kernel (General case, vectorized)
+////////////////////////////////////////////////////////////////////////////////
+//
+// CUDA SOURCE MAPPING:
+//   CUDA Kernel: reorder_batched_ad_indices_kernel_vec
+//   CUDA File: fbgemm_gpu/src/sparse_ops/sparse_reorder_batched_ad.cu
+//
+// DESCRIPTION:
+//   Same decomposition as ReorderBatchedAdIndicesKernel, but the non-broadcast
+//   copy uses 2- or 4-wide vector loads/stores for segments longer than 64
+//   elements when the dtype is 4 or 8 bytes wide and both pointers carry the
+//   required alignment. This is the kernel the CUDA host function launches for
+//   the general path; the scalar variant above is kept as the fallback for
+//   dtypes the vector path does not cover.
+//
+////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * @brief SYCL kernel functor for reordering AD indices (vectorized general case)
+ *
+ * Warp-per-segment decomposition, matching ReorderBatchedAdIndicesKernel. The
+ * non-broadcast branch copies whole `sycl::vec` units where the segment length
+ * and pointer alignment allow, falling back to a scalar copy for misaligned
+ * segments and for the trailing elements that do not fill a vector.
+ */
+template <typename Dtype, typename index_t = int32_t>
+class ReorderBatchedAdIndicesVecKernel {
+public:
+    ReorderBatchedAdIndicesVecKernel(
             at::PackedTensorAccessor32<index_t, 1, RestrictPtrTraits>
                     cat_ad_offsets,
             at::PackedTensorAccessor32<Dtype, 1, RestrictPtrTraits>
