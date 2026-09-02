@@ -26,4 +26,3 @@
       NAME,                                            \
       FBGEMM_DISPATCH_FLOATING_TYPES_CASE(__VA_ARGS__) \
           FBGEMM_DISPATCH_INTEGRAL_TYPES_CASE(__VA_ARGS__))
-          
