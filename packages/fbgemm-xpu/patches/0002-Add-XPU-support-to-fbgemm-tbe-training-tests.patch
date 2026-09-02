@@ -1,4 +1,4 @@
-From 5f62c615b84b30a6751c2ad73321950a1ee4ad60 Mon Sep 17 00:00:00 2001
+From 7823724e6abacd77b2a749be390c34138b33271b Mon Sep 17 00:00:00 2001
 From: Alberto Gallegos <alberto.gallegos.muro@intel.com>
 Date: Tue, 21 Jul 2026 17:56:36 +0000
 Subject: [PATCH] Add XPU support to FBGEMM TBE training frontend and tests
@@ -16,8 +16,8 @@ Signed-off-by: Alberto Gallegos <alberto.gallegos.muro@intel.com>
  .../tbe/training/backward_adagrad_test.py     | 33 +++++---
  .../test/tbe/training/backward_dense_test.py  | 33 ++++++--
  fbgemm_gpu/test/tbe/training/forward_test.py  | 81 +++++++++++++++----
- fbgemm_gpu/test/test_utils.py                 | 27 ++++++-
- 8 files changed, 241 insertions(+), 66 deletions(-)
+ fbgemm_gpu/test/test_utils.py                 | 29 ++++++-
+ 8 files changed, 243 insertions(+), 66 deletions(-)
 
 diff --git a/fbgemm_gpu/fbgemm_gpu/split_table_batched_embeddings_ops_training.py b/fbgemm_gpu/fbgemm_gpu/split_table_batched_embeddings_ops_training.py
 index 688e535..e2a268c 100644
@@ -862,7 +862,7 @@ index 0ec9383..af5d631 100644
          self,
          T: int,
 diff --git a/fbgemm_gpu/test/test_utils.py b/fbgemm_gpu/test/test_utils.py
-index 3d17592..0a332b6 100644
+index 3d17592..cb1f497 100644
 --- a/fbgemm_gpu/test/test_utils.py
 +++ b/fbgemm_gpu/test/test_utils.py
 @@ -21,6 +21,14 @@ import hypothesis.strategies as st
@@ -880,7 +880,7 @@ index 3d17592..0a332b6 100644
  _suppressed_health_checks: list[HealthCheck] = [
      HealthCheck.filter_too_much,
      HealthCheck.data_too_large,
-@@ -58,6 +66,15 @@ additional_decorators: dict[str, list[Callable[..., Any]]] = {
+@@ -58,6 +66,17 @@ additional_decorators: dict[str, list[Callable[..., Any]]] = {
      ],
  }
 
@@ -888,15 +888,17 @@ index 3d17592..0a332b6 100644
 +cuda_available: bool = (
 +    torch.cuda.is_available() and torch.cuda.device_count() > 0
 +)
-+xpu_available: bool = (
-+    torch.xpu.is_available() and torch.xpu.device_count() > 0
++xpu_unavailable: tuple[bool, str] = (
++    not torch.xpu.is_available() or torch.xpu.device_count() == 0,
++    "XPU is not available or no XPU devices were detected",
 +)
++xpu_available: bool = not xpu_unavailable[0]
 +xpu_only: bool = xpu_available and not cuda_available
 +
  # Used for `@unittest.skipIf`
  gpu_unavailable: tuple[bool, str] = (
      not torch.cuda.is_available() or torch.cuda.device_count() == 0,
-@@ -81,7 +98,7 @@ def current_accelerator() -> torch.device | None:
+@@ -81,7 +100,7 @@ def current_accelerator() -> torch.device | None:
      return torch.accelerator.current_accelerator() if accelerator_available else None
 
 
@@ -905,7 +907,7 @@ index 3d17592..0a332b6 100644
 
  # Used for `@unittest.skipIf` for tests that pass in internal CI, but fail on the GitHub runners
  running_on_github: tuple[bool, str] = (
-@@ -280,6 +297,14 @@ def use_cpu_strategy() -> st.SearchStrategy[bool]:
+@@ -280,6 +299,14 @@ def use_cpu_strategy() -> st.SearchStrategy[bool]:
      )
 
 
