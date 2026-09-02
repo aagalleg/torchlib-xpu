@@ -161,7 +161,7 @@ namespace fbgemm_xpu {
         {%- if not dense %}
 
         {%- endif %}
-        
+
         AT_DISPATCH_INDEX_TYPES(indices.scalar_type(), "batched_embedding_nobag_forward_kernel_1", [&] {
         DISPATCH_EMB_CACHE_OUTPUT_TYPES(
             dev_weights.scalar_type(),
@@ -224,7 +224,7 @@ namespace fbgemm_xpu {
                         const size_t local_y = kForwardMaxThreads / kThreadGroupSize;
                         const size_t grid{%- if not dense %}_x{%- endif %} = div_round_up(static_cast<size_t>(total_B), local_y);
                         {%- if dense %}
-                    
+
                         {%- else %}
 
                         {%- endif %}
@@ -260,7 +260,7 @@ namespace fbgemm_xpu {
                     });
                     {%- endif %}
                 }
-                
+
             } catch (const sycl::exception& e) {
                 std::cerr << "SYCL exception: " << e.what() << std::endl;
                 throw;

@@ -128,7 +128,7 @@ def generate_optimized_grad_sum_loop_access(
             [[maybe_unused]] const int32_t d = d_vec * VEC_WIDTH;
             {smem_blob}
         }
-    
+
     } else {
         // kFixedMaxVecsPerThread is known at compile time
         #pragma unroll kFixedMaxVecsPerThread

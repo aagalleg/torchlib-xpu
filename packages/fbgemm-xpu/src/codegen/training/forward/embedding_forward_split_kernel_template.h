@@ -18,7 +18,7 @@
 // SYCL PORT MAPPING TO FBGEMM CUDA SOURCE - FORWARD KERNELS
 ////////////////////////////////////////////////////////////////////////////////
 //
-// This file contains SYCL port of FBGEMM {{ mdesc }} embedding lookup forward 
+// This file contains SYCL port of FBGEMM {{ mdesc }} embedding lookup forward
 // unweighted kernel.
 //
 // ORIGINAL CUDA SOURCE:
@@ -234,7 +234,7 @@ namespace fbgemm_xpu {
                                 weights_slice.store(&output_[output_j][d]);
                             }
                         }
-                        
+
                     }
                 }
 
@@ -276,7 +276,7 @@ namespace fbgemm_xpu {
                 } else if (lxu_cache_conflict_misses_ && *lxu_cache_conflict_misses_ == 0) {
                     // If the UVM cache stats tensor is valid and tell us there are no
                     // conflict unique misses, then the miss rate is effectively 0%
-                        
+
                     // Iterate over each kThreadGroupSize-sized subset of L indices in the bag
                     for (int32_t l_start = 0; l_start < L; l_start += kThreadGroupSize) {
                         // Determine the L index that this thread will load data from in cooperative load
@@ -289,7 +289,7 @@ namespace fbgemm_xpu {
                             // Load cache's index from thread j in the group
                             [[maybe_unused]] int32_t cache_idx_j
                                 = use_lxu_cache ? sycl::select_from_group(sg, cache_idx, j) : 0;
-                                
+
                             const cache_t* cache_weights = reinterpret_cast<const cache_t*>(
                                 &lxu_cache_weights_[cache_idx_j][0]);
                             const auto weights_row = WeightRowAccessor
@@ -312,8 +312,8 @@ namespace fbgemm_xpu {
                     }
                 } else {
                     // Else, the cache conflict miss rate is mixed
-        
-                    
+
+
                     // Iterate over each kThreadGroupSize-sized subset of L indices in the bag
                     for (int32_t l_start = 0; l_start < L; l_start += kThreadGroupSize) {
                         // Determine the L index that this thread will load data from in cooperative load
@@ -399,7 +399,7 @@ namespace fbgemm_xpu {
                         >(
                         &weights[offset_idx_j], // Load from the embedding table
                         D_);
-                    
+
                     for (int32_t i = 0; i < D_; i += kThreadGroupSize * kVecWidth) {
                         const auto d = i + threadIdx_x * kVecWidth;
 

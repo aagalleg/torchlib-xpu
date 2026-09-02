@@ -125,9 +125,9 @@ static inline int64_t syclDeviceMaxWorkGroupSize(
 
 /**
  * @brief Calculate the number of SYCL work-groups (blocks) needed
- * 
+ *
  * Base function for calculating block count with overflow protection.
- * 
+ *
  * @param num_items Total number of items to process
  * @param threads_per_block Number of work-items per work-group
  * @return Number of work-groups needed (capped at max_blocks)
@@ -149,9 +149,9 @@ inline uint32_t xpu_calc_xblock_count_base(int64_t num_items, int64_t threads_pe
 
 /**
  * @brief Calculate the number of SYCL work-groups (blocks) needed
- * 
+ *
  * Validates input and calls xpu_calc_xblock_count_base.
- * 
+ *
  * @param num_items Total number of items to process (must be >= 0)
  * @param threads_per_block Number of work-items per work-group
  * @return Number of work-groups needed
@@ -371,7 +371,7 @@ inline int32_t get_max_work_groups_() {
 inline void validate_local_mem_size(
     sycl::queue& q,
     const int32_t local_mem_bytes) {
-  
+
   auto device = q.get_device();
   auto max_local_mem = device.get_info<sycl::info::device::local_mem_size>();
   TORCH_CHECK(

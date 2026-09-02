@@ -16,7 +16,7 @@
 // SYCL PORT MAPPING TO FBGEMM CUDA SOURCE - FORWARD KERNELS
 ////////////////////////////////////////////////////////////////////////////////
 //
-// This file contains SYCL port of FBGEMM {{ mdesc }} embedding lookup forward 
+// This file contains SYCL port of FBGEMM {{ mdesc }} embedding lookup forward
 // unweighted small kernel.
 //
 // ORIGINAL CUDA SOURCE:
