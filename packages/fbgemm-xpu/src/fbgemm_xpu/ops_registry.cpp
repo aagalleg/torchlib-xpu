@@ -197,9 +197,9 @@ TORCH_LIBRARY_FRAGMENT(fbgemm, m)
             "reorder_batched_ad_lengths("
             "    Tensor cat_ad_lengths, "
             "    Tensor batch_offsets, "
-            "    int num_ads_in_batch, "
+            "    SymInt num_ads_in_batch, "
             "    bool broadcast_lengths=False, "
-            "    int max_batch_size=0"
+            "    SymInt max_batch_size=0"
             ") -> Tensor");
     }
 
@@ -210,9 +210,9 @@ TORCH_LIBRARY_FRAGMENT(fbgemm, m)
             "    Tensor cat_ad_indices, "
             "    Tensor reordered_cat_ad_offsets, "
             "    Tensor batch_offsets, "
-            "    int num_ads_in_batch, "
+            "    SymInt num_ads_in_batch, "
             "    bool broadcast_indices=False, "
-            "    int num_indices_after_broadcast=-1"
+            "    SymInt num_indices_after_broadcast=-1"
             ") -> Tensor");
     }
 }
