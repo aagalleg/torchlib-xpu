@@ -192,7 +192,7 @@ TORCH_LIBRARY_FRAGMENT(fbgemm, m)
         );
     }
 
-    if (!schemaExists("fbgemm::reorder_batched_ad_lengths")) {
+    if (!utils::torch::schemaExists("fbgemm::reorder_batched_ad_lengths")) {
         m.def(
             "reorder_batched_ad_lengths("
             "    Tensor cat_ad_lengths, "
@@ -203,7 +203,7 @@ TORCH_LIBRARY_FRAGMENT(fbgemm, m)
             ") -> Tensor");
     }
 
-    if (!schemaExists("fbgemm::reorder_batched_ad_indices")) {
+    if (!utils::torch::schemaExists("fbgemm::reorder_batched_ad_indices")) {
         m.def(
             "reorder_batched_ad_indices("
             "    Tensor cat_ad_offsets, "
