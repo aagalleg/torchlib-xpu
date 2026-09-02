@@ -27,6 +27,7 @@ and behavior match [FBGEMM].
   - [`permute_1D_sparse_data`][op-permute_1D_sparse_data]
   - [`permute_2D_sparse_data`][op-permute_2D_sparse_data]
 
+
 The following operators are also implemented but do not constitute
 public documented FBGEMM API. These are extra variants, helpers, or utility
 operators alongside the operators above. You can find their exact signature in
@@ -40,6 +41,8 @@ operators alongside the operators above. You can find their exact signature in
 - `jagged_index_select_2d_forward`
 - `permute_2D_sparse_preallocated_out`
 - `populate_bucketized_permute`
+- `reorder_batched_ad_indices`
+- `reorder_batched_ad_lengths`
 
 ## Supported hardware
 
