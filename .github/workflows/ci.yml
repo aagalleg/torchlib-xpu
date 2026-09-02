@@ -447,6 +447,7 @@ jobs:
       run: |
         rm -rf .git/rebase-apply
         git am ../torchlib-xpu/packages/fbgemm-xpu/patches/0001-Add-XPU-support-to-fbgemm-tests.patch
+        git am ../torchlib-xpu/packages/fbgemm-xpu/patches/0002-Add-XPU-support-to-fbgemm-tbe-training-tests.patch
     - name: 'Install Intel drivers'
       run: |
         add-apt-repository -y ppa:kobuk-team/intel-graphics
@@ -468,6 +469,29 @@ jobs:
         pip install --no-cache-dir \
           "$(ls ./_wheels/${{ env.WHEELS }}-${{ env.PR_OR_SHA }}-${{ env.UNIQUE_ID }}/fbgemm_xpu*.whl)[test]" \
           --extra-index-url https://download.pytorch.org/whl/xpu
+    - name: 'Install patched FBGEMM Python frontend'
+      working-directory: fbgemm
+      run: |
+        python - <<'PY'
+        from pathlib import Path
+        import shutil
+
+        import fbgemm_gpu
+
+        source_root = Path("fbgemm_gpu/fbgemm_gpu")
+        target_root = Path(fbgemm_gpu.__file__).resolve().parent
+        for relative_path in (
+            Path("split_table_batched_embeddings_ops_training.py"),
+            Path("tbe/config/embedding_config.py"),
+            Path("tbe/utils/common.py"),
+        ):
+            source = source_root / relative_path
+            target = target_root / relative_path
+            shutil.copy2(source, target)
+            if source.read_bytes() != target.read_bytes():
+                raise RuntimeError(f"Failed to install patched frontend: {relative_path}")
+            print(f"Installed patched frontend: {relative_path}")
+        PY
     - name: 'Test gpu'
       run: |
         python -c "import torch; assert torch.xpu.is_available(), 'XPU (Intel GPU) is not available'"
@@ -483,6 +507,9 @@ jobs:
         pytest -rsf fbgemm_gpu/test/sparse/reorder_batched_test.py
         pytest -rsf fbgemm_gpu/test/tbe/utils/generate_vbe_metadata_test.py
         pytest -rsf fbgemm_gpu/test/tbe/utils/split_embeddings_utils_test.py
+        pytest -rsf fbgemm_gpu/test/tbe/training/forward_test.py
+        pytest -rsf fbgemm_gpu/test/tbe/training/backward_dense_test.py
+        pytest -rsf fbgemm_gpu/test/tbe/training/backward_adagrad_test.py
 
   publish:
     needs: [ compose, test-torchcodec, test-fbgemm ]

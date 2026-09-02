@@ -1,152 +1,250 @@
-From c372a30fecc5ea5e113f98230c54291fcfeb72a8 Mon Sep 17 00:00:00 2001
+From 441cf49e3535b5ef9e916fca3f0cb97e006021e3 Mon Sep 17 00:00:00 2001
 From: Alberto Gallegos <alberto.gallegos.muro@intel.com>
 Date: Tue, 21 Jul 2026 17:56:36 +0000
-Subject: [PATCH] Add XPU support to FBGEMM TBE training tests
+Subject: [PATCH] Add XPU support to FBGEMM TBE training frontend and tests
 
-Retrofit the forward and backward TBE training tests so they exercise the
-XPU implementations of `dense_embedding_codegen_lookup_function` and
-`split_embedding_codegen_lookup_rowwise_adagrad_function_pt2` when only
-`fbgemm-gpu-cpu` (CPU wheel) and `fbgemm-xpu` (XPU op registrations)
-are installed - i.e. no CUDA device is present.
+Extend the shared TBE frontend with ComputeDevice.XPU and accelerator-aware Split and Dense initialization so normal codegen modules allocate DEVICE state directly on XPU. Reject unsupported XPU placements and bounds checking explicitly.
 
-The XPU kernels implement only the no-bag / unweighted / non-VBE /
-non-GWD / uniform-B / non-cache surface, so the patch:
-
-- Registers `fbgemm_xpu` from `fbgemm_gpu/test/test_utils.py` and
-  extends `gpu_available` / `gpu_unavailable` / `use_cpu_strategy()`
-  to treat XPU as a GPU accelerator (unblocking the
-  `@skipIf(*gpu_unavailable)` decorators).
-- Routes `fbgemm_gpu.tbe.utils.common.to_device(..., use_cpu=False)` to
-  `xpu` when CUDA is unavailable (source-side patch).
-- Adds a `fbgemm_gpu/test/conftest.py` that monkey-patches the installed
-  wheel's `to_device` (and the re-exports in `tbe.utils.__init__`,
-  `tbe.utils.offsets`, `tbe.utils.quantize`) so tests running against
-  the `fbgemm-gpu-cpu` wheel also route non-CPU tensors to XPU.
-- Introduces per-file `_SplitCodegenForXPU` / `_DenseCodegenForXPU`
-  shims that build the codegen modules in CPU / HOST layout and then
-  reshape the internal state onto XPU (5-tensor weights list where
-  index 0 is `weights_dev`) so the AutogradXPU op dispatch is hit.
-- Narrows the hypothesis parameter space through `assume(...)` filters
-  and coerces XPU-incompatible parameters inside `execute_forward_`
-  (`use_cache=False`, `use_experimental_tbe=False`, `pooling_mode=NONE`,
-  `weighted=False`, `mixed=False`, `mixed_B=False`, unsupported
-  dtypes remapped) so a single hypothesis example is enough to
-  exercise the target op.  Because `use_cache` is coerced to False,
-  the UVM-cache forward tests (fp16, fp32) reduce to the no-cache
-  path on XPU and are exercised without being skipped.
-- Skips CUDA-only forward tests that call `torch.cuda.*` primitives or
-  exercise features (FP8, raw embedding streaming, fused pooled quant,
-  FP16-large grid) that are not implemented on XPU.
-- Disables `bounds_check_indices` inside the XPU codegen shim
-  (`BoundsCheckMode.NONE`) because the bounds-check op has no XPU
-  kernel today.
-- Filters out one CPU-wheel limitation (BF16 output for the CPU no-bag
-  forward) that is now sampled because `use_cpu_strategy()` returns
-  `booleans()`.
-
-CUDA and CPU-only behaviour is preserved.
+Exercise the production constructors in the forward, dense backward, and rowwise Adagrad tests without private-state shims or collection-time monkey-patching. Keep unsupported XPU variants conditionally skipped without reducing CUDA or CPU coverage.
 
 Signed-off-by: Alberto Gallegos <alberto.gallegos.muro@intel.com>
 ---
- fbgemm_gpu/fbgemm_gpu/tbe/utils/common.py     |   3 +
- fbgemm_gpu/test/conftest.py                   |  67 ++++++
- .../tbe/training/backward_adagrad_common.py   | 191 +++++++++++++++++-
- .../tbe/training/backward_adagrad_test.py     |  10 +
- .../test/tbe/training/backward_dense_test.py  |  50 ++++-
- fbgemm_gpu/test/tbe/training/forward_test.py  | 181 ++++++++++++++++-
- fbgemm_gpu/test/test_utils.py                 |  43 ++--
- 7 files changed, 525 insertions(+), 20 deletions(-)
- create mode 100644 fbgemm_gpu/test/conftest.py
+ ...t_table_batched_embeddings_ops_training.py | 65 ++++++++++++-------
+ .../fbgemm_gpu/tbe/config/embedding_config.py | 38 ++++++++---
+ fbgemm_gpu/fbgemm_gpu/tbe/utils/common.py     | 22 +++----
+ .../tbe/training/backward_adagrad_common.py   | 55 ++++++++++++++--
+ .../tbe/training/backward_adagrad_test.py     |  9 +++
+ .../test/tbe/training/backward_dense_test.py  | 29 +++++++--
+ fbgemm_gpu/test/tbe/training/forward_test.py  | 55 ++++++++++++++--
+ fbgemm_gpu/test/test_utils.py                 | 48 ++++++++++----
+ 8 files changed, 251 insertions(+), 70 deletions(-)
 
+diff --git a/fbgemm_gpu/fbgemm_gpu/split_table_batched_embeddings_ops_training.py b/fbgemm_gpu/fbgemm_gpu/split_table_batched_embeddings_ops_training.py
+index 688e535..b87d661 100644
+--- a/fbgemm_gpu/fbgemm_gpu/split_table_batched_embeddings_ops_training.py
++++ b/fbgemm_gpu/fbgemm_gpu/split_table_batched_embeddings_ops_training.py
+@@ -355,12 +355,7 @@ def apply_split_helper(
+
+
+ def get_available_compute_device() -> ComputeDevice:
+-    if torch.cuda.is_available():
+-        return ComputeDevice.CUDA
+-    elif torch.mtia.is_available():
+-        return ComputeDevice.MTIA
+-    else:
+-        return ComputeDevice.CPU
++    return ComputeDevice.get_available()
+
+
+ # pyre-fixme[13]: Attribute `uvm_cache_stats` is never initialized.
+@@ -815,10 +810,12 @@ class SplitTableBatchedEmbeddingBagsCodegen(nn.Module):
+         assert all(
+             cd == compute_devices[0] for cd in compute_devices
+         ), "Heterogenous compute_devices are NOT supported!"
++        compute_device = compute_devices[0]
++        use_xpu = compute_device == ComputeDevice.XPU
+         self.use_mtia: bool = compute_devices[0] == ComputeDevice.MTIA
+         # Split TBE has different function schemas for CUDA and CPU.
+         # For MTIA device type, it uses the CPU one.
+-        self.use_cpu: bool = compute_devices[0] == ComputeDevice.CPU or self.use_mtia
++        self.use_cpu: bool = compute_device == ComputeDevice.CPU or self.use_mtia
+
+         # Check if init is called from QRSplitTableBatchedEmbeddingBagsCodegen
+         self.is_qr_tbe: bool = is_qr_tbe
+@@ -828,7 +825,14 @@ class SplitTableBatchedEmbeddingBagsCodegen(nn.Module):
+         ), "ComputeDevice.CPU is only for EmbeddingLocation.HOST!"
+         assert self.use_cpu or all(
+             loc != EmbeddingLocation.HOST for loc in locations
+-        ), "EmbeddingLocation.HOST doesn't work for CUDA device!"
++        ), "EmbeddingLocation.HOST doesn't work for accelerator devices!"
++        if use_xpu:
++            if any(loc != EmbeddingLocation.DEVICE for loc in locations):
++                raise ValueError("XPU only supports EmbeddingLocation.DEVICE")
++            if self.bounds_check_mode_int != BoundsCheckMode.NONE.value:
++                raise ValueError(
++                    "XPU requires bounds_check_mode=BoundsCheckMode.NONE"
++                )
+         if self.use_cpu or self.pooling_mode == PoolingMode.NONE:
+             assert output_dtype in [
+                 SparseType.FP32,
+@@ -848,15 +852,28 @@ class SplitTableBatchedEmbeddingBagsCodegen(nn.Module):
+             ), "OptimType.NONE does not support mixed embedding dimension"
+
+         if device is None:
+-            self.current_device: torch.device = (
+-                torch.device("cpu")
+-                if self.use_cpu
+-                else torch.device(torch.cuda.current_device())
+-            )
++            if self.use_cpu:
++                self.current_device = torch.device("cpu")
++            else:
++                accelerator = torch.accelerator.current_accelerator(
++                    check_available=True
++                )
++                if accelerator is None:
++                    raise RuntimeError("No accelerator is available")
++                self.current_device = accelerator
+         elif isinstance(device, torch.device):
+             self.current_device = device
+         else:
+             self.current_device = torch.device(device)
++        if (
++            not self.use_mtia
++            and self.current_device.type in ("cpu", "cuda", "xpu")
++            and ComputeDevice.from_torch_device(self.current_device) != compute_device
++        ):
++            raise ValueError(
++                f"ComputeDevice.{compute_device.name} does not match "
++                f"device {self.current_device}"
++            )
+
+         # add placeholder require_grad param tensor to enable autograd with int8 weights
+         self.placeholder_autograd_tensor = nn.Parameter(
+@@ -4642,6 +4659,7 @@ class DenseTableBatchedEmbeddingBagsCodegen(nn.Module):
+         use_cpu: bool = False,
+         output_dtype: SparseType = SparseType.FP32,
+         use_mtia: bool = False,
++        device: str | torch.device | None = None,
+     ) -> None:  # noqa C901  # tuple of (rows, dims,)
+         super().__init__()
+         self.uuid = str(uuid.uuid4())
+@@ -4667,16 +4685,17 @@ class DenseTableBatchedEmbeddingBagsCodegen(nn.Module):
+                 SparseType.BF16,
+             ], "Fused pooled embedding quantization only supported for cuda."
+
+-        # pyre-fixme[8]: Attribute has type `device`; used as `int | device`.
+-        self.current_device: torch.device = (
+-            torch.device("cpu")
+-            if self.use_cpu
+-            else (
+-                torch.device(f"mtia:{torch.mtia.current_device()}")
+-                if self.use_mtia
+-                else torch.cuda.current_device()
+-            )
+-        )
++        if device is not None:
++            self.current_device = torch.device(device)
++        elif self.use_cpu:
++            self.current_device = torch.device("cpu")
++        elif self.use_mtia:
++            self.current_device = torch.device(f"mtia:{torch.mtia.current_device()}")
++        else:
++            accelerator = torch.accelerator.current_accelerator(check_available=True)
++            if accelerator is None:
++                raise RuntimeError("No accelerator is available")
++            self.current_device = accelerator
+
+         self.embedding_specs = embedding_specs
+         rows, dims = zip(*embedding_specs)
+diff --git a/fbgemm_gpu/fbgemm_gpu/tbe/config/embedding_config.py b/fbgemm_gpu/fbgemm_gpu/tbe/config/embedding_config.py
+index cadc5d5..38b6e47 100644
+--- a/fbgemm_gpu/fbgemm_gpu/tbe/config/embedding_config.py
++++ b/fbgemm_gpu/fbgemm_gpu/tbe/config/embedding_config.py
+@@ -72,8 +72,8 @@ class EmbeddingLocation(enum.IntEnum):
+         Formerly the free function get_new_embedding_location() in
+         split_table_batched_embeddings_ops_common.py.
+         """
+-        # Only support CPU and GPU device
+-        assert device.type == "cpu" or device.type == "cuda"
++        if device.type not in ("cpu", "cuda", "xpu"):
++            raise ValueError(f"Unsupported embedding device: {device}")
+         if cache_load_factor < 0 or cache_load_factor > 1:
+             raise ValueError(
+                 f"cache_load_factor must be between 0.0 and 1.0, got {cache_load_factor}"
+@@ -81,6 +81,10 @@ class EmbeddingLocation(enum.IntEnum):
+
+         if device.type == "cpu":
+             return EmbeddingLocation.HOST
++        if device.type == "xpu":
++            if cache_load_factor != 1.0:
++                raise ValueError("XPU embeddings only support DEVICE placement")
++            return EmbeddingLocation.DEVICE
+         # UVM only
+         elif cache_load_factor == 0:
+             return EmbeddingLocation.MANAGED
+@@ -134,6 +138,20 @@ class ComputeDevice(enum.IntEnum):
+     CPU = 0
+     CUDA = 1
+     MTIA = 2
++    XPU = 3
++
++    @classmethod
++    def from_torch_device(cls, device: torch.device) -> "ComputeDevice":
++        device_types = {
++            "cpu": ComputeDevice.CPU,
++            "cuda": ComputeDevice.CUDA,
++            "mtia": ComputeDevice.MTIA,
++            "xpu": ComputeDevice.XPU,
++        }
++        try:
++            return device_types[device.type]
++        except KeyError as error:
++            raise ValueError(f"Unsupported compute device: {device}") from error
+
+     @classmethod
+     def get_available(cls) -> "ComputeDevice":
+@@ -142,12 +160,16 @@ class ComputeDevice(enum.IntEnum):
+         Formerly the free function get_available_compute_device() in
+         split_table_batched_embeddings_ops_training.py.
+         """
+-        if torch.cuda.is_available():
+-            return ComputeDevice.CUDA
+-        elif torch.mtia.is_available():
+-            return ComputeDevice.MTIA
+-        else:
+-            return ComputeDevice.CPU
++        accelerator = torch.accelerator.current_accelerator(check_available=True)
++        return (
++            ComputeDevice.CPU
++            if accelerator is None
++            else {
++                "cuda": ComputeDevice.CUDA,
++                "mtia": ComputeDevice.MTIA,
++                "xpu": ComputeDevice.XPU,
++            }.get(accelerator.type, ComputeDevice.CPU)
++        )
+
+
+ class EmbeddingSpecInfo(enum.IntEnum):
 diff --git a/fbgemm_gpu/fbgemm_gpu/tbe/utils/common.py b/fbgemm_gpu/fbgemm_gpu/tbe/utils/common.py
-index 5ea148d..22d188c 100644
+index 5ea148d..a7f2ec8 100644
 --- a/fbgemm_gpu/fbgemm_gpu/tbe/utils/common.py
 +++ b/fbgemm_gpu/fbgemm_gpu/tbe/utils/common.py
-@@ -37,6 +37,9 @@ def to_device(t: Deviceable, use_cpu: bool) -> Deviceable:
-     elif torch.cuda.is_available():
+@@ -20,23 +20,17 @@ def round_up(a: int, b: int) -> int:
+
+
+ def get_device() -> torch.device:
+-    if torch.cuda.is_available():
+-        # pyre-fixme[7]: Expected `device` but got `Union[int, device]`.
+-        return torch.cuda.current_device()
+-    elif torch.mtia.is_available():
+-        # pyre-fixme[7]: Expected `device` but got `Union[int, device]`.
+-        return torch.mtia.current_device()
+-    else:
+-        return torch.device("cpu")
++    accelerator = torch.accelerator.current_accelerator(check_available=True)
++    return torch.device("cpu") if accelerator is None else accelerator
+
+
+ def to_device(t: Deviceable, use_cpu: bool) -> Deviceable:
+     if use_cpu:
          # pyre-fixme[7]: Expected `Deviceable` but got `Union[Tensor, torch.nn.EmbeddingBag]`.
-         return t.cuda()
-+    elif hasattr(torch, "xpu") and torch.xpu.is_available():
-+        # pyre-fixme[7]: Expected `Deviceable` but got `Union[Tensor, torch.nn.EmbeddingBag]`.
-+        return t.to(device="xpu")
-     else:
-         # pyre-fixme[7]: Expected `Deviceable` but got `Union[Tensor, torch.nn.EmbeddingBag]`.
-         return t.to(device="mtia")
-diff --git a/fbgemm_gpu/test/conftest.py b/fbgemm_gpu/test/conftest.py
-new file mode 100644
-index 0000000..760273c
---- /dev/null
-+++ b/fbgemm_gpu/test/conftest.py
-@@ -0,0 +1,67 @@
-+#!/usr/bin/env python3
-+# Copyright (c) 2026 Intel Corporation. All Rights Reserved.
-+# SPDX-License-Identifier: BSD-3-Clause
+         return t.cpu()
+-    elif torch.cuda.is_available():
+-        # pyre-fixme[7]: Expected `Deviceable` but got `Union[Tensor, torch.nn.EmbeddingBag]`.
+-        return t.cuda()
+-    else:
+-        # pyre-fixme[7]: Expected `Deviceable` but got `Union[Tensor, torch.nn.EmbeddingBag]`.
+-        return t.to(device="mtia")
 +
-+# pyre-strict
-+
-+"""
-+Pytest conftest for the FBGEMM test suite.
-+
-+When the environment ships `fbgemm-gpu-cpu` (CPU wheel) together with
-+`fbgemm-xpu` (XPU op registrations), the installed
-+`fbgemm_gpu.tbe.utils.common.to_device` falls through to `t.to("mtia")` for
-+`use_cpu=False` because `torch.cuda.is_available()` is False.  That crashes with
-+`AssertionError: Torch not compiled with MTIA enabled`.
-+
-+Monkey-patch `to_device` (and its re-exported binding) so that XPU is picked as
-+the accelerator when CUDA is unavailable.  This runs before pytest imports any
-+test module, so the freshly-patched function is what test files bind when they
-+execute `from fbgemm_gpu.tbe.utils import to_device`.
-+
-+Also import `fbgemm_xpu` best-effort so the XPU dispatch table is populated
-+before tests run.
-+"""
-+import torch
-+
-+# Register XPU (Intel GPU) FBGEMM operator implementations, if available.
-+try:
-+    import fbgemm_xpu  # noqa: F401
-+except ImportError:
-+    pass
-+
-+
-+def _install_xpu_to_device_shim() -> None:
-+    if not (hasattr(torch, "xpu") and torch.xpu.is_available()):
-+        return
-+    if torch.cuda.is_available():
-+        # Preserve CUDA behaviour when both are present.
-+        return
-+
-+    import fbgemm_gpu.tbe.utils as _tbe_utils
-+    import fbgemm_gpu.tbe.utils.common as _tbe_common
-+    import fbgemm_gpu.tbe.utils.offsets as _tbe_offsets
-+    import fbgemm_gpu.tbe.utils.quantize as _tbe_quantize
-+
-+    _original_to_device = _tbe_common.to_device
-+
-+    def to_device(t, use_cpu):  # noqa: ANN001, ANN201
-+        if use_cpu:
-+            return t.cpu()
-+        if torch.cuda.is_available():
-+            return t.cuda()
-+        return t.to(device="xpu")
-+
-+    to_device.__doc__ = (
-+        "XPU-aware replacement installed by fbgemm_gpu/test/conftest.py.\n"
-+        "Routes non-CPU tensors to XPU when CUDA is unavailable."
-+    )
-+    # pyre-ignore[16]: attribute assignment on module.
-+    to_device._original = _original_to_device
-+
-+    _tbe_common.to_device = to_device
-+    _tbe_utils.to_device = to_device
-+    _tbe_offsets.to_device = to_device
-+    _tbe_quantize.to_device = to_device
-+
-+
-+_install_xpu_to_device_shim()
++    device = torch.accelerator.current_accelerator(check_available=True)
++    if device is None:
++        raise RuntimeError("No accelerator is available")
++    # pyre-fixme[7]: Expected `Deviceable` but got `Union[Tensor, torch.nn.EmbeddingBag]`.
++    return t.to(device=device)
 diff --git a/fbgemm_gpu/test/tbe/training/backward_adagrad_common.py b/fbgemm_gpu/test/tbe/training/backward_adagrad_common.py
-index 28fc0a4..bb562d2 100755
+index 28fc0a4..52434b5 100755
 --- a/fbgemm_gpu/test/tbe/training/backward_adagrad_common.py
 +++ b/fbgemm_gpu/test/tbe/training/backward_adagrad_common.py
 @@ -14,6 +14,7 @@ import numpy as np
@@ -157,189 +255,49 @@ index 28fc0a4..bb562d2 100755
      CacheAlgorithm,
      EmbeddingLocation,
      PoolingMode,
-@@ -44,6 +45,7 @@ if open_source:
+@@ -44,6 +45,8 @@ if open_source:
      # pyre-ignore[21]
      from test_utils import (
          additional_decorators,
 +        cuda_available,
++        current_accelerator,
          gpu_available,
          gpu_memory_lt_gb,
          gpu_unavailable,
-@@ -53,10 +55,12 @@ if open_source:
+@@ -53,10 +56,13 @@ if open_source:
          skipIfRocm,
          TEST_WITH_ROCM,
          use_cpu_strategy,
-+        xpu_available,
++        xpu_only,
      )
  else:
      from fbgemm_gpu.test.test_utils import (  # noqa F401
          additional_decorators,
 +        cuda_available,
++        current_accelerator,
          gpu_available,
          gpu_memory_lt_gb,
          gpu_unavailable,
-@@ -66,8 +70,153 @@ else:
+@@ -66,8 +72,10 @@ else:
          skipIfRocm,
          TEST_WITH_ROCM,
          use_cpu_strategy,
-+        xpu_available,
++        xpu_only,
      )
 
-+
-+# XPU-only environments (fbgemm-gpu-cpu + fbgemm-xpu).  The base
-+# `SplitTableBatchedEmbeddingBagsCodegen` has no `ComputeDevice.XPU` code path,
-+# so build the module in CPU mode and relocate all buffers/parameters to XPU
-+# after construction.  Only the no-bag / row-wise Adagrad pt2 kernel is
-+# implemented on XPU today; `execute_backward_adagrad` filters unsupported
-+# combinations via `assume(...)`.
-+_XPU_ONLY: bool = xpu_available and not cuda_available
-+
-+
-+if _XPU_ONLY:
-+
-+    class _SplitCodegenForXPU(SplitTableBatchedEmbeddingBagsCodegen):
-+        def __init__(self, *args, **kwargs) -> None:
-+            # Force CPU construction (no CUDA calls, HOST placement).
-+            if "embedding_specs" in kwargs:
-+                embedding_specs = kwargs.pop("embedding_specs")
-+            elif args:
-+                embedding_specs = args[0]
-+                args = args[1:]
-+            else:
-+                raise TypeError(
-+                    "_SplitCodegenForXPU requires `embedding_specs`"
-+                )
-+            cpu_specs = [
-+                (E, D, EmbeddingLocation.HOST, ComputeDevice.CPU)
-+                for (E, D, _M, _C) in embedding_specs
-+            ]
-+            # `bounds_check_indices` has no XPU kernel; disable to avoid the
-+            # NotImplementedError in `SplitTableBatchedEmbeddingBagsCodegen.
-+            # prepare_inputs()`.  Callers may override by passing an explicit
-+            # `bounds_check_mode` kwarg.
-+            kwargs.setdefault("bounds_check_mode", BoundsCheckMode.NONE)
-+            super().__init__(cpu_specs, *args, **kwargs)
-+
-+            # Reshape the CPU/HOST buffer layout into the DEVICE layout the
-+            # invoker expects for XPU (5-tensor weights list where index 0 is
-+            # `weights_dev` on the accelerator).  Move the actual data from
-+            # `weights_host` into `weights_dev` on XPU, zero out the HOST
-+            # buffer so `host_weights.numel() == 0`, and flip the placement
-+            # markers from HOST (=3) to DEVICE (=0).
-+            xpu = torch.device("xpu")
-+
-+            def _reshape_pair(host_name: str, dev_name: str) -> None:
-+                host_t = getattr(self, host_name)
-+                dev_t = getattr(self, dev_name)
-+                is_param = isinstance(host_t, torch.nn.Parameter)
-+                if host_t is not None and host_t.numel() > 0:
-+                    new_dev = host_t.detach().to(xpu).clone()
-+                    new_host = torch.empty(
-+                        0, dtype=host_t.dtype, device=xpu
-+                    )
-+                    if is_param:
-+                        # `weights_host` / `momentum1_host` are declared as
-+                        # `nn.Parameter`; the corresponding *_dev slots are
-+                        # too.  Wrap to keep type-compatibility.
-+                        new_dev = torch.nn.Parameter(
-+                            new_dev, requires_grad=host_t.requires_grad
-+                        )
-+                        new_host = torch.nn.Parameter(
-+                            new_host, requires_grad=host_t.requires_grad
-+                        )
-+                    setattr(self, dev_name, new_dev)
-+                    setattr(self, host_name, new_host)
-+                elif dev_t is not None:
-+                    moved = dev_t.to(xpu)
-+                    if isinstance(dev_t, torch.nn.Parameter):
-+                        moved = torch.nn.Parameter(
-+                            moved, requires_grad=dev_t.requires_grad
-+                        )
-+                    setattr(self, dev_name, moved)
-+
-+            _reshape_pair("weights_host", "weights_dev")
-+            _reshape_pair("momentum1_host", "momentum1_dev")
-+
-+            # Move remaining tensor attributes onto XPU and flip placements.
-+            for name in (
-+                "weights_uvm",
-+                "lxu_cache_weights",
-+                "weights_offsets",
-+                "momentum1_uvm",
-+                "momentum1_offsets",
-+                "hash_size_cumsum",
-+                "D_offsets",
-+                "rows_per_table",
-+                "bounds_check_warning",
-+                # Note: `learning_rate_tensor` must stay on CPU per the
-+                # kernel contract (see comment in test_utils.py).  Leave it.
-+                # Plain (non-registered) attributes that are initialised on
-+                # `self.current_device` at construction time; the base class
-+                # created them on CPU, so move them onto XPU now.
-+                "lxu_cache_locations_empty",
-+                "lxu_cache_locations",
-+                "_indices",
-+                "_offsets",
-+                "_vbe_B_offsets",
-+            ):
-+                t = getattr(self, name, None)
-+                if isinstance(t, torch.Tensor) and t.device.type != "xpu":
-+                    setattr(self, name, t.to(xpu))
-+
-+            # `placeholder_autograd_tensor` is a Parameter; keep the wrapper.
-+            pat = getattr(self, "placeholder_autograd_tensor", None)
-+            if isinstance(pat, torch.Tensor) and pat.device.type != "xpu":
-+                self.placeholder_autograd_tensor = torch.nn.Parameter(
-+                    pat.detach().to(xpu),
-+                    requires_grad=pat.requires_grad,
-+                )
-+
-+            for placements_name in (
-+                "weights_placements",
-+                "momentum1_placements",
-+            ):
-+                p = getattr(self, placements_name, None)
-+                if isinstance(p, torch.Tensor):
-+                    setattr(
-+                        self,
-+                        placements_name,
-+                        torch.full_like(
-+                            p, int(EmbeddingLocation.DEVICE), device=xpu
-+                        ),
-+                    )
-+
-+            # `split_embedding_weights()` uses the Python list attribute
-+            # `weights_physical_placements` (not the tensor above) to select
-+            # `weights_dev` / `weights_host` / `weights_uvm`; keep them in
-+            # lock-step with the tensor placements.
-+            if hasattr(self, "weights_physical_placements"):
-+                self.weights_physical_placements = [
-+                    EmbeddingLocation.DEVICE
-+                    for _ in self.weights_physical_placements
-+                ]
-+            # Same for `split_optimizer_states()`.
-+            if hasattr(self, "momentum1_physical_placements"):
-+                self.momentum1_physical_placements = [
-+                    EmbeddingLocation.DEVICE
-+                    for _ in self.momentum1_physical_placements
-+                ]
-+
-+            # pyre-ignore[16]: attribute defined on the base class.
-+            self.current_device = xpu
-+            self.use_cpu = False
-+            self.use_mtia = False
 +
  VERBOSITY: Verbosity = Verbosity.verbose
 
  common_strategy: dict[str, Any] = {
-@@ -152,7 +301,35 @@ def execute_backward_adagrad(  # noqa C901
+@@ -152,7 +160,31 @@ def execute_backward_adagrad(  # noqa C901
      # Disable dynamo tests due to unknown failure
      assume(not compile)
 
+-    emb_op = SplitTableBatchedEmbeddingBagsCodegen
 +    # XPU only implements no-bag / unweighted / non-VBE / non-GWD / uniform-B
 +    # rowwise Adagrad without cache, stochastic rounding, weight decay or
 +    # max-norm.  Filter unsupported combos out of the hypothesis space.
-+    if _XPU_ONLY and not use_cpu:
++    if xpu_only and not use_cpu:
 +        assume(pooling_mode == PoolingMode.NONE)
 +        assume(row_wise)
 +        assume(not weighted)
@@ -354,47 +312,71 @@ index 28fc0a4..bb562d2 100755
 +    # `booleans()` (Phase 1) so tests now sample `use_cpu=True` cases too.
 +    # The CPU wheel does not implement BF16 for the no-bag forward
 +    # (`split_embedding_nobag_cpu_forward_1`), so filter that combo out.
-+    if _XPU_ONLY and use_cpu:
++    if xpu_only and use_cpu:
 +        assume(
 +            not (
 +                pooling_mode == PoolingMode.NONE
 +                and output_dtype == SparseType.BF16
 +            )
 +        )
-+
-     emb_op = SplitTableBatchedEmbeddingBagsCodegen
-+    if _XPU_ONLY and not use_cpu:
-+        emb_op = _SplitCodegenForXPU
 
      if pooling_mode == PoolingMode.SUM:
          mode = "sum"
-@@ -215,6 +392,12 @@ def execute_backward_adagrad(  # noqa C901
+@@ -215,6 +247,9 @@ def execute_backward_adagrad(  # noqa C901
      elif use_cpu:
          managed = [EmbeddingLocation.HOST] * T
          compute_device = ComputeDevice.CPU
-+    elif _XPU_ONLY:
-+        # XPU tensors always live on device; `ComputeDevice.CPU` is only used
-+        # as a stand-in for the constructor - the `_SplitCodegenForXPU` shim
-+        # relocates every tensor to XPU right after construction.
++    elif xpu_only:
 +        managed = [EmbeddingLocation.DEVICE] * T
-+        compute_device = ComputeDevice.CPU
++        compute_device = ComputeDevice.XPU
      elif TEST_WITH_ROCM:
          # ROCm managed memory allocation is under development
          managed = [EmbeddingLocation.DEVICE] * T
-@@ -488,6 +671,12 @@ def execute_backward_adagrad(  # noqa C901
+@@ -267,7 +302,7 @@ def execute_backward_adagrad(  # noqa C901
+     cc = (
+         tbe_op
+         if tbe_op
+-        else emb_op(
++        else SplitTableBatchedEmbeddingBagsCodegen(
+             embedding_specs=[
+                 (E, D, M, compute_device) for (E, D, M) in zip(Es, Ds, managed)
+             ],
+@@ -280,6 +315,12 @@ def execute_backward_adagrad(  # noqa C901
+             stochastic_rounding=stochastic_rounding,
+             pooling_mode=pooling_mode,
+             output_dtype=output_dtype,
++            device=current_accelerator() if xpu_only and not use_cpu else None,
++            bounds_check_mode=(
++                BoundsCheckMode.NONE
++                if xpu_only and not use_cpu
++                else BoundsCheckMode.WARNING
++            ),
+         )
+     )
+     # TODO: make it compile for CPU and unweighted
+@@ -488,6 +529,12 @@ def execute_backward_adagrad(  # noqa C901
      if tbe_op:
          return
 
 +    # The per-sample-weights + gradcheck sub-block that follows re-instantiates
 +    # the codegen module with `PoolingMode.SUM` (weighted route), which is not
 +    # implemented on XPU.  Skip the remainder of the function on XPU.
-+    if _XPU_ONLY and not use_cpu:
++    if xpu_only and not use_cpu:
 +        return
 +
      # Free large tensors no longer needed before gradcheck to reduce GPU memory pressure
      del bs, bs_features, fs, gos, goc, fc2, ref_output
      del split_optimizer_states, get_optimizer_states, xs, xws
-@@ -562,7 +751,7 @@ def execute_backward_adagrad(  # noqa C901
+@@ -498,7 +545,7 @@ def execute_backward_adagrad(  # noqa C901
+         D_gradcheck = (D_gradcheck + 15) // 16 * 4
+     else:
+         D_gradcheck = D_gradcheck * 4
+-    cc = emb_op(
++    cc = SplitTableBatchedEmbeddingBagsCodegen(
+         embedding_specs=[
+             (E, D_gradcheck, M, compute_device) for (E, M) in zip(Es, managed)
+         ],
+@@ -562,7 +609,7 @@ def execute_backward_adagrad(  # noqa C901
      y.sum().backward()
      indice_weight_grad_mask = per_sample_weights.grad.clone().cpu()
 
@@ -404,183 +386,156 @@ index 28fc0a4..bb562d2 100755
 
      acc_B = 0
 diff --git a/fbgemm_gpu/test/tbe/training/backward_adagrad_test.py b/fbgemm_gpu/test/tbe/training/backward_adagrad_test.py
-index f6c1cea..550aaf2 100644
+index f6c1cea..efe6cec 100644
 --- a/fbgemm_gpu/test/tbe/training/backward_adagrad_test.py
 +++ b/fbgemm_gpu/test/tbe/training/backward_adagrad_test.py
-@@ -59,6 +59,7 @@ class BackwardAdagradTest(unittest.TestCase):
+@@ -43,6 +43,7 @@ from .backward_adagrad_common import (
+     skipIfNotRocm,
+     SparseType,
+     st,
++    xpu_only,
+ )
+
+ # Set up test strategy
+@@ -59,6 +60,7 @@ class BackwardAdagradTest(unittest.TestCase):
      @unittest.skipIf(*gpu_unavailable)
      @given(mixed_B=st.booleans(), **test_st)
      @settings(**common_settings)
-+    @unittest.skip("Not yet exercised by the XPU test patch")
++    @unittest.skipIf(xpu_only, "Pooled rowwise Adagrad is not implemented on XPU")
      def test_backward_adagrad_fp16_pmSUM(  # noqa C901
          self,
          **kwargs: Any,
-@@ -75,6 +76,7 @@ class BackwardAdagradTest(unittest.TestCase):
+@@ -75,6 +77,7 @@ class BackwardAdagradTest(unittest.TestCase):
      @unittest.skipIf(*gpu_unavailable)
      @given(mixed_B=st.booleans(), **test_st)
      @settings(**common_settings)
-+    @unittest.skip("Not yet exercised by the XPU test patch")
++    @unittest.skipIf(xpu_only, "FP8 rowwise Adagrad is not implemented on XPU")
      def test_backward_adagrad_fp8_pmSUM(  # noqa C901
          self,
          **kwargs: Any,
-@@ -98,6 +100,7 @@ class BackwardAdagradTest(unittest.TestCase):
+@@ -98,6 +101,7 @@ class BackwardAdagradTest(unittest.TestCase):
          **test_st,
      )
      @settings(**common_settings)
-+    @unittest.skip("Not yet exercised by the XPU test patch")
++    @unittest.skipIf(xpu_only, "Pooled rowwise Adagrad is not implemented on XPU")
      def test_backward_adagrad_fp16_pmMEAN(  # noqa C901
          self,
          **kwargs: Any,
-@@ -132,6 +135,7 @@ class BackwardAdagradTest(unittest.TestCase):
+@@ -132,6 +136,7 @@ class BackwardAdagradTest(unittest.TestCase):
          **test_st,
      )
      @settings(**common_settings)
-+    @unittest.skip("Not yet exercised by the XPU test patch")
++    @unittest.skipIf(xpu_only, "Pooled rowwise Adagrad is not implemented on XPU")
      def test_backward_adagrad_fp32_pmSUM(  # noqa C901
          self,
          **kwargs: Any,
-@@ -149,6 +153,7 @@ class BackwardAdagradTest(unittest.TestCase):
-         **test_st_cpu,
-     )
-     @settings(**common_settings)
-+    @unittest.skip("Not yet exercised by the XPU test patch")
-     def test_backward_adagrad_fp32_cpu(  # noqa C901
-         self,
-         pooling_mode: PoolingMode,
-@@ -170,6 +175,7 @@ class BackwardAdagradTest(unittest.TestCase):
-         **test_st_cpu,
-     )
-     @settings(**common_settings)
-+    @unittest.skip("Not yet exercised by the XPU test patch")
-     def test_backward_adagrad_fp32_pmNONE_cpu(  # noqa C901
-         self,
-         **kwargs: Any,
-@@ -187,6 +193,7 @@ class BackwardAdagradTest(unittest.TestCase):
+@@ -187,6 +192,7 @@ class BackwardAdagradTest(unittest.TestCase):
          **test_st,
      )
      @settings(**common_settings)
-+    @unittest.skip("Not yet exercised by the XPU test patch")
++    @unittest.skipIf(xpu_only, "Pooled rowwise Adagrad is not implemented on XPU")
      def test_backward_adagrad_fp32_pmMEAN(  # noqa C901
          self,
          **kwargs: Any,
-@@ -222,6 +229,7 @@ class BackwardAdagradTest(unittest.TestCase):
+@@ -222,6 +228,7 @@ class BackwardAdagradTest(unittest.TestCase):
          **test_st,
      )
      @settings(**common_settings)
-+    @unittest.skip("Not yet exercised by the XPU test patch")
++    @unittest.skipIf(xpu_only, "Max-norm rowwise Adagrad is not implemented on XPU")
      def test_backward_adagrad_fp16_pmSUM_with_max_norm(  # noqa C901
          self,
          **kwargs: Any,
-@@ -523,6 +531,7 @@ class BackwardAdagradTest(unittest.TestCase):
+@@ -523,6 +530,7 @@ class BackwardAdagradTest(unittest.TestCase):
 
      @unittest.skipIf(*gpu_unavailable)
      @unittest.skipIf(*gpu_memory_lt_gb(40))
-+    @unittest.skip("Not yet exercised by the XPU test patch")
++    @unittest.skipIf(xpu_only, "Config fixtures include unsupported XPU variants")
      def test_backward_adagrad_from_config_file(self) -> None:
          """
          Test backward adagrad pass using TBE specs loaded from a JSON file.
-@@ -618,6 +627,7 @@ class BackwardAdagradTest(unittest.TestCase):
+@@ -618,6 +626,7 @@ class BackwardAdagradTest(unittest.TestCase):
 
      @unittest.skipIf(*gpu_unavailable)
      @unittest.skipIf(*gpu_memory_lt_gb(20))
-+    @unittest.skip("Not yet exercised by the XPU test patch")
++    @unittest.skipIf(xpu_only, "Pooled rowwise Adagrad is not implemented on XPU")
      def test_backward_adagrad_with_simple_tbe_op(self) -> None:
          """
          Test execute_backward_adagrad with a pre-created TBE op.
 diff --git a/fbgemm_gpu/test/tbe/training/backward_dense_test.py b/fbgemm_gpu/test/tbe/training/backward_dense_test.py
-index 93dd820..9072bcd 100644
+index 93dd820..f84b8cd 100644
 --- a/fbgemm_gpu/test/tbe/training/backward_dense_test.py
 +++ b/fbgemm_gpu/test/tbe/training/backward_dense_test.py
-@@ -36,16 +36,44 @@ from ..common import (
+@@ -36,13 +36,22 @@ from ..common import (
 
  if open_source:
      # pyre-ignore[21]
 -    from test_utils import additional_decorators, gradcheck, optests, use_cpu_strategy
 +    from test_utils import (
 +        additional_decorators,
-+        cuda_available,
++        current_accelerator,
 +        gradcheck,
 +        optests,
 +        use_cpu_strategy,
-+        xpu_available,
++        xpu_only,
 +    )
  else:
      from fbgemm_gpu.test.test_utils import (
          additional_decorators,
-+        cuda_available,
++        current_accelerator,
          gradcheck,
          optests,
          use_cpu_strategy,
-+        xpu_available,
++        xpu_only,
      )
 
 
-+# When XPU is the only accelerator available (fbgemm-gpu-cpu + fbgemm-xpu), the
-+# CUDA construction paths in `DenseTableBatchedEmbeddingBagsCodegen` cannot run.
-+# Build on CPU, then relocate the module to XPU so the XPU dispatch of
-+# `torch.ops.fbgemm.dense_embedding_codegen_lookup_function` is exercised.
-+_XPU_ONLY: bool = xpu_available and not cuda_available
-+
-+
-+if _XPU_ONLY:
-+
-+    class _DenseCodegenForXPU(DenseTableBatchedEmbeddingBagsCodegen):
-+        def __init__(self, *args, **kwargs) -> None:
-+            kwargs.pop("use_cpu", None)
-+            super().__init__(*args, use_cpu=True, **kwargs)
-+            self.to("xpu")
-+            # pyre-ignore[16]: attribute is defined on the base class.
-+            self.current_device = torch.device("xpu")
-+            self.use_cpu = False
-+
-+
- VERBOSITY: Verbosity = Verbosity.verbose
-
-
-@@ -106,7 +134,16 @@ class BackwardDenseTest(unittest.TestCase):
+@@ -106,7 +115,13 @@ class BackwardDenseTest(unittest.TestCase):
          assume(not weighted or pooling_mode != PoolingMode.NONE)
          assume(not mixed_B or (not use_cpu and pooling_mode != PoolingMode.NONE))
 
+-        emb_op = DenseTableBatchedEmbeddingBagsCodegen
 +        # XPU only implements no-bag / unweighted / non-VBE / non-GWD / uniform-B.
-+        if _XPU_ONLY and not use_cpu:
++        if xpu_only and not use_cpu:
 +            assume(pooling_mode == PoolingMode.NONE)
 +            assume(not weighted)
 +            assume(not mixed)
 +            assume(not mixed_B)
 +
-         emb_op = DenseTableBatchedEmbeddingBagsCodegen
-+        if _XPU_ONLY and not use_cpu:
-+            emb_op = _DenseCodegenForXPU
          if pooling_mode == PoolingMode.SUM:
              mode = "sum"
              do_pooling = True
-@@ -215,8 +252,9 @@ class BackwardDenseTest(unittest.TestCase):
+@@ -208,14 +223,14 @@ class BackwardDenseTest(unittest.TestCase):
+         if weights_precision == SparseType.FP16 and not use_cpu:
+             grad_weights = grad_weights.half()
+
+-        cc = emb_op(
++        cc = DenseTableBatchedEmbeddingBagsCodegen(
+             embedding_specs=[(E, D) for (E, D) in zip(Es, Ds)],
+             pooling_mode=pooling_mode,
+             use_cpu=use_cpu,
              weights_precision=weights_precision,
              output_dtype=output_dtype,
++            device=current_accelerator() if xpu_only and not use_cpu else None,
          )
 -        # Test torch JIT script compatibility
--        if not use_cpu:
-+        # Test torch JIT script compatibility (CUDA path only; XPU shim is
-+        # not JIT-scriptable).
-+        if not use_cpu and not _XPU_ONLY:
+         if not use_cpu:
              cc = torch.jit.script(cc)
 
-         for t in range(T):
-@@ -281,6 +319,12 @@ class BackwardDenseTest(unittest.TestCase):
+@@ -281,6 +296,12 @@ class BackwardDenseTest(unittest.TestCase):
              rtol=tol,
          )
 
 +        # Weighted / pooled route is not implemented on XPU: skip the
 +        # per-sample-weights + gradcheck sub-test in the XPU-only environment
 +        # before instantiating another CUDA-backed codegen module.
-+        if _XPU_ONLY and not use_cpu:
++        if xpu_only and not use_cpu:
 +            return
 +
          cc = DenseTableBatchedEmbeddingBagsCodegen(
              [(E, D) for (E, D) in zip(Es, Ds)],
              # NOTE: only SUM pooling can work with per_sample_weights!
 diff --git a/fbgemm_gpu/test/tbe/training/forward_test.py b/fbgemm_gpu/test/tbe/training/forward_test.py
-index 0ec9383..5b6ceb6 100644
+index 0ec9383..0ce6399 100644
 --- a/fbgemm_gpu/test/tbe/training/forward_test.py
 +++ b/fbgemm_gpu/test/tbe/training/forward_test.py
 @@ -19,6 +19,7 @@ import numpy as np
@@ -591,170 +546,45 @@ index 0ec9383..5b6ceb6 100644
      CacheAlgorithm,
      EmbeddingLocation,
      PoolingMode,
-@@ -52,22 +53,153 @@ if open_source:
+@@ -52,22 +53,27 @@ if open_source:
      # pyre-ignore[21]
      from test_utils import (
          additional_decorators,
-+        cuda_available,
++        current_accelerator,
          gpu_unavailable,
          is_nvidia_device,
          optests,
          running_in_oss,
          TEST_WITH_ROCM,
-+        xpu_available,
++        xpu_only,
      )
  else:
      from fbgemm_gpu.test.test_utils import (
          additional_decorators,
-+        cuda_available,
++        current_accelerator,
          gpu_unavailable,
          is_nvidia_device,
          optests,
          running_in_oss,
          TEST_WITH_ROCM,
-+        xpu_available,
++        xpu_only,
      )
 
-+
-+# XPU-only environments (fbgemm-gpu-cpu + fbgemm-xpu).  The base codegen module
-+# has no `ComputeDevice.XPU` code path, so build the module in CPU mode and
-+# relocate all buffers/parameters to XPU after construction so that the XPU
-+# implementation of `split_embedding_codegen_lookup_rowwise_adagrad_function_pt2`
-+# is exercised in the forward path.
-+_XPU_ONLY: bool = xpu_available and not cuda_available
-+
-+
-+if _XPU_ONLY:
-+
-+    class _SplitCodegenForXPU(SplitTableBatchedEmbeddingBagsCodegen):
-+        def __init__(self, *args, **kwargs) -> None:
-+            if "embedding_specs" in kwargs:
-+                embedding_specs = kwargs.pop("embedding_specs")
-+            elif args:
-+                embedding_specs = args[0]
-+                args = args[1:]
-+            else:
-+                raise TypeError(
-+                    "_SplitCodegenForXPU requires `embedding_specs`"
-+                )
-+            cpu_specs = [
-+                (E, D, EmbeddingLocation.HOST, ComputeDevice.CPU)
-+                for (E, D, _M, _C) in embedding_specs
-+            ]
-+            # `bounds_check_indices` has no XPU kernel; disable to avoid the
-+            # NotImplementedError in `prepare_inputs()`.
-+            kwargs.setdefault("bounds_check_mode", BoundsCheckMode.NONE)
-+            super().__init__(cpu_specs, *args, **kwargs)
-+
-+            # Reshape the CPU/HOST buffer layout into the DEVICE layout the
-+            # invoker expects for XPU (5-tensor weights list where index 0
-+            # is `weights_dev` on the accelerator).  Move data from
-+            # `weights_host` into `weights_dev` on XPU, zero out `weights_host`
-+            # so `host_weights.numel() == 0`, and flip placement markers from
-+            # HOST (=3) to DEVICE (=0).
-+            xpu = torch.device("xpu")
-+
-+            def _reshape_pair(host_name: str, dev_name: str) -> None:
-+                host_t = getattr(self, host_name)
-+                dev_t = getattr(self, dev_name)
-+                is_param = isinstance(host_t, torch.nn.Parameter)
-+                if host_t is not None and host_t.numel() > 0:
-+                    new_dev = host_t.detach().to(xpu).clone()
-+                    new_host = torch.empty(
-+                        0, dtype=host_t.dtype, device=xpu
-+                    )
-+                    if is_param:
-+                        new_dev = torch.nn.Parameter(
-+                            new_dev, requires_grad=host_t.requires_grad
-+                        )
-+                        new_host = torch.nn.Parameter(
-+                            new_host, requires_grad=host_t.requires_grad
-+                        )
-+                    setattr(self, dev_name, new_dev)
-+                    setattr(self, host_name, new_host)
-+                elif dev_t is not None:
-+                    moved = dev_t.to(xpu)
-+                    if isinstance(dev_t, torch.nn.Parameter):
-+                        moved = torch.nn.Parameter(
-+                            moved, requires_grad=dev_t.requires_grad
-+                        )
-+                    setattr(self, dev_name, moved)
-+
-+            _reshape_pair("weights_host", "weights_dev")
-+            _reshape_pair("momentum1_host", "momentum1_dev")
-+
-+            for name in (
-+                "weights_uvm",
-+                "lxu_cache_weights",
-+                "weights_offsets",
-+                "momentum1_uvm",
-+                "momentum1_offsets",
-+                "hash_size_cumsum",
-+                "D_offsets",
-+                "rows_per_table",
-+                "bounds_check_warning",
-+                # `learning_rate_tensor` must stay on CPU per the kernel
-+                # contract.  Leave it in place.
-+                "lxu_cache_locations_empty",
-+                "lxu_cache_locations",
-+                "_indices",
-+                "_offsets",
-+                "_vbe_B_offsets",
-+            ):
-+                t = getattr(self, name, None)
-+                if isinstance(t, torch.Tensor) and t.device.type != "xpu":
-+                    setattr(self, name, t.to(xpu))
-+
-+            pat = getattr(self, "placeholder_autograd_tensor", None)
-+            if isinstance(pat, torch.Tensor) and pat.device.type != "xpu":
-+                self.placeholder_autograd_tensor = torch.nn.Parameter(
-+                    pat.detach().to(xpu),
-+                    requires_grad=pat.requires_grad,
-+                )
-+
-+            for placements_name in (
-+                "weights_placements",
-+                "momentum1_placements",
-+            ):
-+                p = getattr(self, placements_name, None)
-+                if isinstance(p, torch.Tensor):
-+                    setattr(
-+                        self,
-+                        placements_name,
-+                        torch.full_like(
-+                            p, int(EmbeddingLocation.DEVICE), device=xpu
-+                        ),
-+                    )
-+
-+            if hasattr(self, "weights_physical_placements"):
-+                self.weights_physical_placements = [
-+                    EmbeddingLocation.DEVICE
-+                    for _ in self.weights_physical_placements
-+                ]
-+            if hasattr(self, "momentum1_physical_placements"):
-+                self.momentum1_physical_placements = [
-+                    EmbeddingLocation.DEVICE
-+                    for _ in self.momentum1_physical_placements
-+                ]
-+
-+            # pyre-ignore[16]: attribute defined on the base class.
-+            self.current_device = xpu
-+            self.use_cpu = False
-+            self.use_mtia = False
 +
  VERBOSITY: Verbosity = Verbosity.verbose
 
  fp8_dtype: torch.dtype = (
-@@ -170,7 +302,32 @@ class ForwardTest(unittest.TestCase):
+@@ -170,7 +176,29 @@ class ForwardTest(unittest.TestCase):
          # NOTE: Raw embedding streaming not supported on CPU
          assume(not enable_raw_embedding_streaming or not use_cpu)
 
+-        emb_op = SplitTableBatchedEmbeddingBagsCodegen
 +        # XPU only implements no-bag / unweighted / non-VBE / non-cache /
 +        # rowwise-Adagrad forward.  The GPU test-method helpers pick most of
 +        # these parameters via `random.choice` inside their bodies, so filter
 +        # via `assume` (hypothesis) *and* coerce the local parameters so that
 +        # a single hypothesis example is enough to exercise the target op.
-+        if _XPU_ONLY and not use_cpu:
++        if xpu_only and not use_cpu:
 +            pooling_mode = PoolingMode.NONE
 +            weighted = False
 +            mixed = False
@@ -772,26 +602,29 @@ index 0ec9383..5b6ceb6 100644
 +            ):
 +                output_dtype = SparseType.FP32
 +
-         emb_op = SplitTableBatchedEmbeddingBagsCodegen
-+        if _XPU_ONLY and not use_cpu:
-+            emb_op = _SplitCodegenForXPU
          if pooling_mode == PoolingMode.SUM:
              mode = "sum"
              do_pooling = True
-@@ -211,6 +368,12 @@ class ForwardTest(unittest.TestCase):
+@@ -211,6 +239,9 @@ class ForwardTest(unittest.TestCase):
          if use_cpu:
              managed = [EmbeddingLocation.HOST] * T
              compute_device = ComputeDevice.CPU
-+        elif _XPU_ONLY:
-+            # XPU tensors live on device; `ComputeDevice.CPU` is only used as a
-+            # stand-in for the constructor - the `_SplitCodegenForXPU` shim
-+            # relocates every tensor to XPU right after construction.
++        elif xpu_only:
 +            managed = [EmbeddingLocation.DEVICE] * T
-+            compute_device = ComputeDevice.CPU
++            compute_device = ComputeDevice.XPU
          elif TEST_WITH_ROCM:
              # ROCm managed memory allocation is under development
              managed = [EmbeddingLocation.DEVICE] * T
-@@ -319,7 +482,11 @@ class ForwardTest(unittest.TestCase):
+@@ -307,7 +338,7 @@ class ForwardTest(unittest.TestCase):
+             )
+
+         # Create a TBE op
+-        cc = emb_op(
++        cc = SplitTableBatchedEmbeddingBagsCodegen(
+             embedding_specs=[
+                 (
+                     E,
+@@ -319,7 +350,11 @@ class ForwardTest(unittest.TestCase):
              ],
              weights_precision=weights_precision,
              optimizer=(
@@ -799,81 +632,84 @@ index 0ec9383..5b6ceb6 100644
 +                # Force rowwise Adagrad on XPU so the forward path exercises
 +                # `split_embedding_codegen_lookup_rowwise_adagrad_function_pt2`.
 +                OptimType.EXACT_ROWWISE_ADAGRAD
-+                if (_XPU_ONLY and not use_cpu) or mixed_B
++                if (xpu_only and not use_cpu) or mixed_B
 +                else OptimType.EXACT_SGD
              ),
              learning_rate=0.05,
              cache_algorithm=cache_algorithm,
-@@ -330,8 +497,9 @@ class ForwardTest(unittest.TestCase):
+@@ -329,8 +364,13 @@ class ForwardTest(unittest.TestCase):
+             prefetch_pipeline=prefetch_pipeline,
              enable_raw_embedding_streaming=enable_raw_embedding_streaming,
              res_params=res_params,
++            device=current_accelerator() if xpu_only and not use_cpu else None,
++            bounds_check_mode=(
++                BoundsCheckMode.NONE
++                if xpu_only and not use_cpu
++                else BoundsCheckMode.WARNING
++            ),
          )
 -        # Test torch JIT script compatibility
--        if not use_cpu:
-+        # Test torch JIT script compatibility (CUDA path only; the XPU shim
-+        # is not JIT-scriptable).
-+        if not use_cpu and not _XPU_ONLY:
+         if not use_cpu:
              cc = torch.jit.script(cc)
 
-         for t in range(T):
-@@ -665,6 +833,7 @@ class ForwardTest(unittest.TestCase):
+@@ -665,6 +705,7 @@ class ForwardTest(unittest.TestCase):
          max_examples=MAX_EXAMPLES_LONG_RUNNING,
          deadline=None,
      )
-+    @unittest.skipIf(_XPU_ONLY, "FP16 large-grid test uses torch.cuda APIs")
++    @unittest.skipIf(xpu_only, "FP16 large-grid test uses torch.cuda APIs")
      def test_forward_gpu_no_cache_fp16_large(
          self,
          use_experimental_tbe: bool,
-@@ -823,6 +992,7 @@ class ForwardTest(unittest.TestCase):
+@@ -823,6 +864,7 @@ class ForwardTest(unittest.TestCase):
 
      @optests.dontGenerateOpCheckTests("FP8 compute requires custom op support.")
      @unittest.skipIf(*gpu_unavailable)
-+    @unittest.skipIf(_XPU_ONLY, "FP8 is not implemented on XPU")
++    @unittest.skipIf(xpu_only, "FP8 is not implemented on XPU")
      def test_forward_gpu_no_cache_fp8(
          self,
          use_experimental_tbe: bool = False,  # TODO This does not yet work when True.
-@@ -954,6 +1124,7 @@ class ForwardTest(unittest.TestCase):
+@@ -954,6 +996,7 @@ class ForwardTest(unittest.TestCase):
          max_examples=MAX_EXAMPLES_LONG_RUNNING,
          deadline=None,
      )
-+    @unittest.skipIf(_XPU_ONLY, "UVM cache is not implemented on XPU")
++    @unittest.skipIf(xpu_only, "UVM cache is not implemented on XPU")
      def test_forward_gpu_uvm_cache_int8(
          self,
          cache_algorithm: CacheAlgorithm,
-@@ -1019,6 +1190,7 @@ class ForwardTest(unittest.TestCase):
+@@ -1019,6 +1062,7 @@ class ForwardTest(unittest.TestCase):
          max_examples=MAX_EXAMPLES_LONG_RUNNING,
          deadline=None,
      )
-+    @unittest.skipIf(_XPU_ONLY, "UVM cache is not implemented on XPU")
++    @unittest.skipIf(xpu_only, "UVM cache is not implemented on XPU")
      def test_forward_gpu_uvm_cache_fp8(
          self,
          cache_algorithm: CacheAlgorithm,
-@@ -1230,6 +1402,7 @@ class ForwardTest(unittest.TestCase):
+@@ -1230,6 +1274,7 @@ class ForwardTest(unittest.TestCase):
          max_examples=MAX_EXAMPLES_LONG_RUNNING,
          deadline=None,
      )
-+    @unittest.skipIf(_XPU_ONLY, "Fused pooled embedding quant is not implemented on XPU")
++    @unittest.skipIf(xpu_only, "Fused pooled embedding quant is not implemented on XPU")
      def test_forward_fused_pooled_emb_quant(
          self,
          T: int,
-@@ -1366,6 +1539,7 @@ class ForwardTest(unittest.TestCase):
+@@ -1366,6 +1411,7 @@ class ForwardTest(unittest.TestCase):
          max_examples=MAX_EXAMPLES_LONG_RUNNING,
          deadline=None,
      )
-+    @unittest.skipIf(_XPU_ONLY, "Raw embedding streaming is not implemented on XPU")
++    @unittest.skipIf(xpu_only, "Raw embedding streaming is not implemented on XPU")
      def test_forward_raw_embedding_streaming(
          self,
          T: int,
-@@ -1435,6 +1609,7 @@ class ForwardTest(unittest.TestCase):
+@@ -1435,6 +1481,7 @@ class ForwardTest(unittest.TestCase):
          max_examples=MAX_EXAMPLES_LONG_RUNNING,
          deadline=None,
      )
-+    @unittest.skipIf(_XPU_ONLY, "Raw embedding streaming is not implemented on XPU")
++    @unittest.skipIf(xpu_only, "Raw embedding streaming is not implemented on XPU")
      def test_forward_mixed_cache_non_cache_tables_w_raw_embedding_streaming(
          self,
          T: int,
 diff --git a/fbgemm_gpu/test/test_utils.py b/fbgemm_gpu/test/test_utils.py
-index 3d17592..c642985 100644
+index 3d17592..e71cdfa 100644
 --- a/fbgemm_gpu/test/test_utils.py
 +++ b/fbgemm_gpu/test/test_utils.py
 @@ -21,6 +21,14 @@ import hypothesis.strategies as st
@@ -891,7 +727,7 @@ index 3d17592..c642985 100644
  _suppressed_health_checks: list[HealthCheck] = [
      HealthCheck.filter_too_much,
      HealthCheck.data_too_large,
-@@ -58,10 +66,21 @@ additional_decorators: dict[str, list[Callable[..., Any]]] = {
+@@ -58,10 +66,26 @@ additional_decorators: dict[str, list[Callable[..., Any]]] = {
      ],
  }
 
@@ -905,6 +741,11 @@ index 3d17592..c642985 100644
 +    and torch.xpu.is_available()
 +    and torch.xpu.device_count() > 0
 +)
++xpu_only: bool = xpu_available and not cuda_available
++xpu_unavailable: tuple[bool, str] = (
++    not xpu_available,
++    "XPU is not available or no XPU devices were detected",
++)
 +
 +# Used for `@unittest.skipIf`.  Treat XPU as a "GPU" so that GPU-only tests
 +# unlock on XPU-only environments (fbgemm-gpu-cpu + fbgemm-xpu).
@@ -916,7 +757,7 @@ index 3d17592..c642985 100644
  )
  # Used for `if` statements inside tests
  gpu_available: bool = not gpu_unavailable[0]
-@@ -81,7 +100,7 @@ def current_accelerator() -> torch.device | None:
+@@ -81,7 +105,7 @@ def current_accelerator() -> torch.device | None:
      return torch.accelerator.current_accelerator() if accelerator_available else None
 
 
@@ -925,7 +766,7 @@ index 3d17592..c642985 100644
 
  # Used for `@unittest.skipIf` for tests that pass in internal CI, but fail on the GitHub runners
  running_on_github: tuple[bool, str] = (
-@@ -269,15 +288,13 @@ def cpu_only() -> st.SearchStrategy[list[torch.device]]:
+@@ -269,15 +293,13 @@ def cpu_only() -> st.SearchStrategy[list[torch.device]]:
 
 
  def use_cpu_strategy() -> st.SearchStrategy[bool]:
