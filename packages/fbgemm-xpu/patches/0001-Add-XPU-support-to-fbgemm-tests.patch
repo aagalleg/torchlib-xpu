@@ -25,24 +25,36 @@ Enable expand_into_jagged_permute_test.py on the current accelerator using the
 shared accelerator_available/current_accelerator helpers and device-agnostic
 tensor transfers.
 
+Also adds XPU support to sparse/reorder_batched_test.py for the
+reorder_batched_ad_lengths and reorder_batched_ad_indices operators, including
+their *_large_grid regression tests. Those two allocate B = 2**27 elements and
+were guarded by gpu_memory_lt_gb, which reads torch.cuda unconditionally and so
+short-circuits to "memory is sufficient" on any non-CUDA accelerator instead of
+checking one. Add accelerator_memory_lt_gb, which follows torch.accelerator, and
+gate the two tests on it so they exercise the grid-stride path on XPU. The
+remaining accelerator tests in that file stay gated on gpu_unavailable, so they
+keep running on CUDA and skip automatically on XPU:
+reorder_batched_sequence_embeddings and its *_large_grid counterpart have no XPU
+implementation.
+
 Signed-off-by: Alberto Gallegos <alberto.gallegos.muro@intel.com>
 Signed-off-by: Felipe Leza Alvarez <felipe.leza.alvarez@intel.com>
 
 Co-authored-by: Felipe Leza Alvarez <felipe.leza.alvarez@intel.com>
 ---
- fbgemm_gpu/test/sparse/misc_ops_test.py       |  24 ++-
- .../sparse/permute_sparse_features_test.py    |  12 +-
- fbgemm_gpu/test/sparse/cumsum_test.py         |   4 +
- fbgemm_gpu/test/test_utils.py                 |  25 ++-
- .../test/sparse/block_bucketize_test.py       | 161 +++++++++---------
- .../tbe/utils/generate_vbe_metadata_test.py   |  23 ++-
- .../tbe/utils/split_embeddings_utils_test.py  |  33 +++-
- .../jagged/expand_into_jagged_permute_test.py |  29 ++--
- .../test/jagged/jagged_index_select_2d_test.py |  22 ++++++++++++++++--
- 9 files changed, 222 insertions(+), 111 deletions(-)
-
+ fbgemm_gpu/test/sparse/misc_ops_test.py | 24 ++++++++++++++++++++----
+ fbgemm_gpu/test/sparse/permute_sparse_features_test.py | 12 ++++++++----
+ fbgemm_gpu/test/sparse/cumsum_test.py | 4 ++++
+ fbgemm_gpu/test/test_utils.py | 52 ++++++++++++++++++++++++++++++++++++++-----
+ fbgemm_gpu/test/sparse/block_bucketize_test.py | 161 +++++++++++++------------
+ .../test/tbe/utils/generate_vbe_metadata_test.py   | 23 ++++++++++++++++++++--
+ .../test/tbe/utils/split_embeddings_utils_test.py  | 33 ++++++++++++++++++++--
+ .../test/jagged/expand_into_jagged_permute_test.py | 29 ++++++++++++++--------
+ .../test/jagged/jagged_index_select_2d_test.py     | 22 +++++++++++++++++-----
+ fbgemm_gpu/test/sparse/reorder_batched_test.py | 47 ++++++++++++++++----------
+ 10 files changed, 279 insertions(+), 128 deletions(-)
 diff --git a/fbgemm_gpu/test/sparse/misc_ops_test.py b/fbgemm_gpu/test/sparse/misc_ops_test.py
-index edb0d3615..2876ee209 100644
+index edb0d36..2876ee2 100644
 --- a/fbgemm_gpu/test/sparse/misc_ops_test.py
 +++ b/fbgemm_gpu/test/sparse/misc_ops_test.py
 @@ -24,7 +24,7 @@ from .common import extend_test_class, open_source
@@ -134,7 +146,7 @@ index edb0d3615..2876ee209 100644
          # When 'output_shape' is None, the function will return a tensor with dynamic shape.
          with self.assertRaisesRegex(
 diff --git a/fbgemm_gpu/test/sparse/permute_sparse_features_test.py b/fbgemm_gpu/test/sparse/permute_sparse_features_test.py
-index d358f4b8f..880d02100 100644
+index d358f4b..880d021 100644
 --- a/fbgemm_gpu/test/sparse/permute_sparse_features_test.py
 +++ b/fbgemm_gpu/test/sparse/permute_sparse_features_test.py
 @@ -19,9 +19,12 @@ from hypothesis import given, settings
@@ -187,7 +199,7 @@ index d358f4b8f..880d02100 100644
          lengths = torch.tensor(
              [[0, 0, 1], [0, 1, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 1]],
 diff --git a/fbgemm_gpu/test/sparse/cumsum_test.py b/fbgemm_gpu/test/sparse/cumsum_test.py
-index 79aad1b55..e8389aef3 100644
+index 79aad1b..e8389ae 100644
 --- a/fbgemm_gpu/test/sparse/cumsum_test.py
 +++ b/fbgemm_gpu/test/sparse/cumsum_test.py
 @@ -29,6 +29,9 @@ else:
@@ -209,7 +221,7 @@ index 79aad1b55..e8389aef3 100644
          batch_size=st.integers(10, 1000),
          max_len=st.integers(10, 1000),
 diff --git a/fbgemm_gpu/test/test_utils.py b/fbgemm_gpu/test/test_utils.py
-index 260e11ef0..3d17592d3 100644
+index 260e11e..c7f49c6 100644
 --- a/fbgemm_gpu/test/test_utils.py
 +++ b/fbgemm_gpu/test/test_utils.py
 @@ -66,6 +66,21 @@ gpu_unavailable: tuple[bool, str] = (
@@ -256,8 +268,42 @@ index 260e11ef0..3d17592d3 100644
  
  
  class optests:
+@@ -274,6 +289,33 @@ def gpu_memory_lt_gb(x: int) -> tuple[bool, str]:
+     )
+ 
+ 
++def accelerator_memory_lt_gb(x: int) -> tuple[bool, str]:
++    """Accelerator-aware counterpart of ``gpu_memory_lt_gb``.
++
++    ``gpu_memory_lt_gb`` reads ``torch.cuda`` unconditionally, so on a
++    non-CUDA accelerator it short-circuits to ``False`` -- reporting "memory
++    is sufficient" for every device rather than actually checking one. Tests
++    that allocate large buffers on the current accelerator need a probe that
++    follows ``torch.accelerator`` instead.
++
++    Returns ``(False, ...)`` when no accelerator is present; the accompanying
++    ``accelerator_unavailable`` guard is what skips those runs.
++    """
++    assert x > 0, "GB value must be positive"
++    device = current_accelerator()
++    if device is None:
++        return (False, f"Accelerator memory < {x}GB")
++    module = getattr(torch, device.type, None)
++    get_device_properties = getattr(module, "get_device_properties", None)
++    if get_device_properties is None:
++        return (False, f"Accelerator memory < {x}GB")
++    total_memory = get_device_properties(device.index or 0).total_memory
++    return (
++        (total_memory / (1024**3)) < x,
++        f"Accelerator memory < {x}GB",
++    )
++
++
+ def skipIfRocm(
+     reason: str = "Test currently doesn't work on the ROCm stack",
+ ) -> Callable[[Callable[..., None]], Callable[..., None]]:
 diff --git a/fbgemm_gpu/test/sparse/block_bucketize_test.py b/fbgemm_gpu/test/sparse/block_bucketize_test.py
-index ab89381fd..08e6a2401 100644
+index ab89381..08e6a24 100644
 --- a/fbgemm_gpu/test/sparse/block_bucketize_test.py
 +++ b/fbgemm_gpu/test/sparse/block_bucketize_test.py
 @@ -20,7 +20,7 @@ from .common import extend_test_class, open_source
@@ -726,7 +772,7 @@ index ab89381fd..08e6a2401 100644
  
              torch.testing.assert_close(
 diff --git a/fbgemm_gpu/test/tbe/utils/generate_vbe_metadata_test.py b/fbgemm_gpu/test/tbe/utils/generate_vbe_metadata_test.py
-index 08ca3eab9..cb35fb34d 100755
+index 08ca3ea..cb35fb3 100755
 --- a/fbgemm_gpu/test/tbe/utils/generate_vbe_metadata_test.py
 +++ b/fbgemm_gpu/test/tbe/utils/generate_vbe_metadata_test.py
 @@ -11,6 +11,7 @@ import unittest
@@ -775,7 +821,7 @@ index 08ca3eab9..cb35fb34d 100755
      def test_generate_vbe_metadata_kernel(self):
          self.execute_generate_vbe_metadata_kernel(
 diff --git a/fbgemm_gpu/test/tbe/utils/split_embeddings_utils_test.py b/fbgemm_gpu/test/tbe/utils/split_embeddings_utils_test.py
-index 5186ea1af..11f0cbbd8 100644
+index 5186ea1..11f0cbb 100644
 --- a/fbgemm_gpu/test/tbe/utils/split_embeddings_utils_test.py
 +++ b/fbgemm_gpu/test/tbe/utils/split_embeddings_utils_test.py
 @@ -16,6 +16,7 @@ import unittest
@@ -834,7 +880,7 @@ index 5186ea1af..11f0cbbd8 100644
          # pyre-ignore[16]
          tensor_queue = torch.classes.fbgemm.TensorQueue(torch.empty(0))
 diff --git a/fbgemm_gpu/test/jagged/expand_into_jagged_permute_test.py b/fbgemm_gpu/test/jagged/expand_into_jagged_permute_test.py
-index e3eb1b52c..2259a6b18 100644
+index e3eb1b5..2259a6b 100644
 --- a/fbgemm_gpu/test/jagged/expand_into_jagged_permute_test.py
 +++ b/fbgemm_gpu/test/jagged/expand_into_jagged_permute_test.py
 @@ -19,10 +19,14 @@ from hypothesis import given, settings, Verbosity
@@ -894,10 +940,10 @@ index e3eb1b52c..2259a6b18 100644
  
      @unittest.skipIf(*gpu_unavailable)
 diff --git a/fbgemm_gpu/test/jagged/jagged_index_select_2d_test.py b/fbgemm_gpu/test/jagged/jagged_index_select_2d_test.py
-index 70b2ef276..84a129fc7 100644
+index 2e28863..4a88812 100644
 --- a/fbgemm_gpu/test/jagged/jagged_index_select_2d_test.py
 +++ b/fbgemm_gpu/test/jagged/jagged_index_select_2d_test.py
-@@ -19,10 +19,15 @@
+@@ -19,10 +19,15 @@ from .common import additional_decorators, open_source
  
  if open_source:
      # pyre-ignore[21]
@@ -914,7 +960,7 @@ index 70b2ef276..84a129fc7 100644
  
  @optests.generate_opcheck_tests(additional_decorators=additional_decorators)
  class JaggedIndexSelect2DTest(unittest.TestCase):
-@@ -62,7 +67,9 @@
+@@ -62,7 +67,9 @@ class JaggedIndexSelect2DTest(unittest.TestCase):
                  torch.long,
              ]  # Disable torch.bfloat16 due to large error bound
          ),
@@ -925,7 +971,7 @@ index 70b2ef276..84a129fc7 100644
          check_non_contiguous=st.booleans(),
          known_shape=st.booleans(),
      )
-@@ -79,7 +86,7 @@
+@@ -79,7 +86,7 @@ class JaggedIndexSelect2DTest(unittest.TestCase):
          check_non_contiguous: bool,
          known_shape: bool,
      ) -> None:
@@ -934,7 +980,7 @@ index 70b2ef276..84a129fc7 100644
          is_float = jagged_tensor_dtype in [torch.float, torch.half, torch.bfloat16]
          lengths = torch.randint(
              low=0,
-@@ -142,6 +149,11 @@
+@@ -142,6 +149,11 @@ class JaggedIndexSelect2DTest(unittest.TestCase):
          if not is_float:
              return
  
@@ -946,7 +992,7 @@ index 70b2ef276..84a129fc7 100644
          grad = torch.rand_like(output)
          grad_ref = grad.detach().clone()
  
-@@ -193,7 +205,7 @@
+@@ -193,7 +205,7 @@ class JaggedIndexSelect2DTest(unittest.TestCase):
                  torch.long,
              ]  # Disable torch.bfloat16 due to large error bound
          ),
@@ -955,7 +1001,7 @@ index 70b2ef276..84a129fc7 100644
      )
      @settings(max_examples=20, deadline=None)
      def test_jagged_index_select_2d_in_inference(
-@@ -206,7 +218,7 @@
+@@ -206,7 +218,7 @@ class JaggedIndexSelect2DTest(unittest.TestCase):
          jagged_tensor_dtype: torch.dtype,
          use_cpu: bool,
      ) -> None:
@@ -964,6 +1010,150 @@ index 70b2ef276..84a129fc7 100644
          is_float = jagged_tensor_dtype in [torch.float, torch.half, torch.bfloat16]
          lengths = torch.randint(
              low=0,
+diff --git a/fbgemm_gpu/test/sparse/reorder_batched_test.py b/fbgemm_gpu/test/sparse/reorder_batched_test.py
+index 8dc2507..0f3b8fc 100644
+--- a/fbgemm_gpu/test/sparse/reorder_batched_test.py
++++ b/fbgemm_gpu/test/sparse/reorder_batched_test.py
+@@ -21,19 +21,27 @@ from .common import extend_test_class, open_source
+ 
+ if open_source:
+     # pyre-ignore[21]
+-    from test_utils import gpu_memory_lt_gb, gpu_unavailable, optests, skipIfRocm
++    from test_utils import accelerator_memory_lt_gb, accelerator_unavailable, current_accelerator, gpu_memory_lt_gb, gpu_unavailable, optests, skipIfRocm
+ else:
+     import fbgemm_gpu.sparse_ops  # noqa: F401, E402
+     from fbgemm_gpu.test.test_utils import (
++        accelerator_memory_lt_gb,
++        accelerator_unavailable,
++        current_accelerator,
+         gpu_memory_lt_gb,
+         gpu_unavailable,
+         optests,
+         skipIfRocm,
+     )
+ 
++# Registers the XPU (Intel GPU) FBGEMM operator implementations.
++import fbgemm_xpu  # noqa: F401, E402
++
++ACCELERATOR = current_accelerator()
++
+ 
+ class ReorderBatchedTest(unittest.TestCase):
+-    @unittest.skipIf(*gpu_unavailable)
++    @unittest.skipIf(*accelerator_unavailable)
+     @given(
+         B=st.integers(min_value=1, max_value=20),
+         T=st.integers(min_value=1, max_value=20),
+@@ -58,7 +66,7 @@ class ReorderBatchedTest(unittest.TestCase):
+         if broadcast_lengths:
+             cat_ad_lengths = (
+                 torch.cat([torch.tensor([L for _ in range(T)]) for _ in range(B)], 0)
+-                .cuda()
++                .to(ACCELERATOR)
+                 .to(Dtype)
+             )
+             cat_ad_lengths_broadcasted = cat_ad_lengths.tile([A])
+@@ -67,11 +75,11 @@ class ReorderBatchedTest(unittest.TestCase):
+                 torch.cat(
+                     [torch.tensor([L for _ in range(T * A)]) for _ in range(B)], 0
+                 )
+-                .cuda()
++                .to(ACCELERATOR)
+                 .to(Dtype)
+             )
+             cat_ad_lengths_broadcasted = cat_ad_lengths
+-        batch_offsets = torch.tensor([A * b for b in range(B + 1)]).int().cuda()
++        batch_offsets = torch.tensor([A * b for b in range(B + 1)]).int().to(ACCELERATOR)
+         num_ads_in_batch = B * A
+         reordered_batched_ad_lengths = torch.ops.fbgemm.reorder_batched_ad_lengths(
+             cat_ad_lengths, batch_offsets, num_ads_in_batch, broadcast_lengths
+@@ -132,8 +140,10 @@ class ReorderBatchedTest(unittest.TestCase):
+             cat_ad_lengths_broadcasted, reordered_batched_ad_lengths
+         )
+ 
+-    @skipIfRocm
+-    @unittest.skipIf(*gpu_unavailable)
++    # `skipIfRocm` is a decorator factory: applied bare it replaces the test with
++    # its undecorated wrapper, silently discarding `@given` so the body never runs.
++    @skipIfRocm()
++    @unittest.skipIf(*accelerator_unavailable)
+     @given(
+         B=st.integers(min_value=1, max_value=20),
+         T=st.integers(min_value=1, max_value=20),
+@@ -165,7 +175,7 @@ class ReorderBatchedTest(unittest.TestCase):
+                     size=(B * T * L,),
+                 )
+                 .int()
+-                .cuda()
++                .to(ACCELERATOR)
+                 .to(Dtype)
+             )
+             cat_ad_lengths = (
+@@ -174,7 +184,7 @@ class ReorderBatchedTest(unittest.TestCase):
+                     0,
+                 )
+                 .int()
+-                .cuda()
++                .to(ACCELERATOR)
+             )
+             cat_ad_lengths_broadcasted = cat_ad_lengths.tile([A])
+         else:
+@@ -185,7 +195,7 @@ class ReorderBatchedTest(unittest.TestCase):
+                     size=(B * T * A * L,),
+                 )
+                 .int()
+-                .cuda()
++                .to(ACCELERATOR)
+                 .to(Dtype)
+             )
+             cat_ad_lengths = (
+@@ -194,10 +204,10 @@ class ReorderBatchedTest(unittest.TestCase):
+                     0,
+                 )
+                 .int()
+-                .cuda()
++                .to(ACCELERATOR)
+             )
+             cat_ad_lengths_broadcasted = cat_ad_lengths
+-        batch_offsets = torch.tensor([A * b for b in range(B + 1)]).int().cuda()
++        batch_offsets = torch.tensor([A * b for b in range(B + 1)]).int().to(ACCELERATOR)
+         num_ads_in_batch = B * A
+         reordered_cat_ad_lengths = torch.ops.fbgemm.reorder_batched_ad_lengths(
+             cat_ad_lengths, batch_offsets, num_ads_in_batch, broadcast_indices
+@@ -510,7 +520,10 @@ class ReorderBatchedTest(unittest.TestCase):
+             reordered_sequence_embedding_from_indices, reordered_cat_sequence_embeddings
+         )
+ 
+-    @skipIfRocm
++    # `skipIfRocm` is a decorator factory: applied bare it replaces the test with
++    # its undecorated wrapper, silently discarding `@given` so the body never runs.
++    # This op has no XPU kernel, so it stays gated on `gpu_unavailable`.
++    @skipIfRocm()
+     @unittest.skipIf(*gpu_unavailable)
+     @given(
+         B=st.integers(min_value=1, max_value=20),
+@@ -611,8 +624,8 @@ class ReorderBatchedTest(unittest.TestCase):
+             reordered_sequence_embedding_from_indices, reordered_cat_sequence_embeddings
+         )
+ 
+-    @unittest.skipIf(*gpu_unavailable)
+-    @unittest.skipIf(*gpu_memory_lt_gb(4))
++    @unittest.skipIf(*accelerator_unavailable)
++    @unittest.skipIf(*accelerator_memory_lt_gb(4))
+     def test_reorder_batched_ad_lengths_large_grid(self) -> None:
+         """
+         Reproduces the HIP grid-overflow bug in reorder_batched_ad_lengths_kernel
+@@ -658,8 +671,8 @@ class ReorderBatchedTest(unittest.TestCase):
+ 
+         torch.testing.assert_close(reordered_gpu.cpu(), reordered_cpu)
+ 
+-    @unittest.skipIf(*gpu_unavailable)
+-    @unittest.skipIf(*gpu_memory_lt_gb(4))
++    @unittest.skipIf(*accelerator_unavailable)
++    @unittest.skipIf(*accelerator_memory_lt_gb(4))
+     def test_reorder_batched_ad_indices_large_grid(self) -> None:
+         """
+         Reproduces the HIP grid-overflow bug in
 -- 
 2.43.0
 
