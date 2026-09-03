@@ -1,4 +1,4 @@
-From 3d1196d5e3838f583ae0bee26371247c4bc0a18e Mon Sep 17 00:00:00 2001
+From 700f653af645aef8ec18e9b037a621411177156d Mon Sep 17 00:00:00 2001
 From: Alberto Gallegos <alberto.gallegos.muro@intel.com>
 Date: Tue, 21 Jul 2026 17:56:36 +0000
 Subject: [PATCH] Add XPU support to FBGEMM TBE training frontend and tests
@@ -13,12 +13,12 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  ...t_table_batched_embeddings_ops_training.py | 40 +++++++---
  .../fbgemm_gpu/tbe/config/embedding_config.py | 11 ++-
  fbgemm_gpu/fbgemm_gpu/tbe/utils/common.py     |  6 ++
- .../tbe/training/backward_adagrad_common.py   | 54 ++++++++++++-
+ .../tbe/training/backward_adagrad_common.py   | 60 +++++++++++++--
  .../tbe/training/backward_adagrad_test.py     | 33 +++++---
- .../test/tbe/training/backward_dense_test.py  | 26 ++++++-
+ .../test/tbe/training/backward_dense_test.py  | 32 +++++++-
  fbgemm_gpu/test/tbe/training/forward_test.py  | 77 +++++++++++++++----
- fbgemm_gpu/test/test_utils.py                 | 21 ++++-
- 8 files changed, 224 insertions(+), 44 deletions(-)
+ fbgemm_gpu/test/test_utils.py                 | 17 ++++
+ 8 files changed, 229 insertions(+), 47 deletions(-)
 
 diff --git a/fbgemm_gpu/fbgemm_gpu/split_table_batched_embeddings_ops_training.py b/fbgemm_gpu/fbgemm_gpu/split_table_batched_embeddings_ops_training.py
 index 688e535..609453d 100644
@@ -175,7 +175,7 @@ index 5ea148d..f9df9f4 100644
          # pyre-fixme[7]: Expected `Deviceable` but got `Union[Tensor, torch.nn.EmbeddingBag]`.
          return t.to(device="mtia")
 diff --git a/fbgemm_gpu/test/tbe/training/backward_adagrad_common.py b/fbgemm_gpu/test/tbe/training/backward_adagrad_common.py
-index 28fc0a4..0d854b1 100755
+index 28fc0a4..acfdcd5 100755
 --- a/fbgemm_gpu/test/tbe/training/backward_adagrad_common.py
 +++ b/fbgemm_gpu/test/tbe/training/backward_adagrad_common.py
 @@ -14,6 +14,7 @@ import numpy as np
@@ -186,7 +186,7 @@ index 28fc0a4..0d854b1 100755
      CacheAlgorithm,
      EmbeddingLocation,
      PoolingMode,
-@@ -43,29 +44,35 @@ from ..common import (  # noqa E402
+@@ -43,29 +44,33 @@ from ..common import (  # noqa E402
  if open_source:
      # pyre-ignore[21]
      from test_utils import (
@@ -202,7 +202,7 @@ index 28fc0a4..0d854b1 100755
          skipIfNotRocm,
          skipIfRocm,
          TEST_WITH_ROCM,
-         use_cpu_strategy,
+-        use_cpu_strategy,
 +        xpu_only,
      )
  else:
@@ -219,13 +219,19 @@ index 28fc0a4..0d854b1 100755
          skipIfNotRocm,
          skipIfRocm,
          TEST_WITH_ROCM,
-         use_cpu_strategy,
+-        use_cpu_strategy,
 +        xpu_only,
      )
 
  VERBOSITY: Verbosity = Verbosity.verbose
-@@ -86,7 +93,7 @@ common_strategy: dict[str, Any] = {
-     "use_cpu": use_cpu_strategy(),
+@@ -83,10 +88,12 @@ common_strategy: dict[str, Any] = {
+     "mixed": st.booleans(),
+     "use_cache": st.booleans(),
+     "cache_algorithm": st.sampled_from(CacheAlgorithm),
+-    "use_cpu": use_cpu_strategy(),
++    # `use_cpu_strategy()` only checks CUDA, which would force CPU-only
++    # runs on XPU.
++    "use_cpu": st.booleans() if accelerator_available else st.just(True),
      "output_dtype": (
          st.sampled_from([SparseType.FP32, SparseType.FP16, SparseType.BF16])
 -        if gpu_available
@@ -468,7 +474,7 @@ index f6c1cea..eca6478 100644
          """
          Test execute_backward_adagrad with a pre-created TBE op.
 diff --git a/fbgemm_gpu/test/tbe/training/backward_dense_test.py b/fbgemm_gpu/test/tbe/training/backward_dense_test.py
-index 93dd820..0a3faa8 100644
+index 93dd820..4e893b6 100644
 --- a/fbgemm_gpu/test/tbe/training/backward_dense_test.py
 +++ b/fbgemm_gpu/test/tbe/training/backward_dense_test.py
 @@ -36,13 +36,22 @@ from ..common import (
@@ -477,25 +483,37 @@ index 93dd820..0a3faa8 100644
      # pyre-ignore[21]
 -    from test_utils import additional_decorators, gradcheck, optests, use_cpu_strategy
 +    from test_utils import (
++        accelerator_available,
 +        additional_decorators,
 +        current_accelerator,
 +        gradcheck,
 +        optests,
-+        use_cpu_strategy,
 +        xpu_only,
 +    )
  else:
      from fbgemm_gpu.test.test_utils import (
++        accelerator_available,
          additional_decorators,
 +        current_accelerator,
          gradcheck,
          optests,
-         use_cpu_strategy,
+-        use_cpu_strategy,
 +        xpu_only,
      )
 
 
-@@ -106,7 +115,15 @@ class BackwardDenseTest(unittest.TestCase):
+@@ -69,7 +78,9 @@ class BackwardDenseTest(unittest.TestCase):
+                 PoolingMode.NONE,
+             ]
+         ),
+-        use_cpu=use_cpu_strategy(),
++        # `use_cpu_strategy()` only checks CUDA, which would force CPU-only
++        # runs on XPU.
++        use_cpu=st.booleans() if accelerator_available else st.just(True),
+         output_dtype=st.sampled_from(
+             [SparseType.FP32, SparseType.FP16, SparseType.BF16]
+         ),
+@@ -106,7 +117,15 @@ class BackwardDenseTest(unittest.TestCase):
          assume(not weighted or pooling_mode != PoolingMode.NONE)
          assume(not mixed_B or (not use_cpu and pooling_mode != PoolingMode.NONE))
 
@@ -511,7 +529,7 @@ index 93dd820..0a3faa8 100644
          if pooling_mode == PoolingMode.SUM:
              mode = "sum"
              do_pooling = True
-@@ -214,6 +231,7 @@ class BackwardDenseTest(unittest.TestCase):
+@@ -214,6 +233,7 @@ class BackwardDenseTest(unittest.TestCase):
              use_cpu=use_cpu,
              weights_precision=weights_precision,
              output_dtype=output_dtype,
@@ -519,7 +537,7 @@ index 93dd820..0a3faa8 100644
          )
          # Test torch JIT script compatibility
          if not use_cpu:
-@@ -281,6 +299,12 @@ class BackwardDenseTest(unittest.TestCase):
+@@ -281,6 +301,12 @@ class BackwardDenseTest(unittest.TestCase):
              rtol=tol,
          )
 
@@ -784,7 +802,7 @@ index 0ec9383..98a6424 100644
          self,
          T: int,
 diff --git a/fbgemm_gpu/test/test_utils.py b/fbgemm_gpu/test/test_utils.py
-index 3d17592..b194fc5 100644
+index 3d17592..5309435 100644
 --- a/fbgemm_gpu/test/test_utils.py
 +++ b/fbgemm_gpu/test/test_utils.py
 @@ -21,6 +21,14 @@ import hypothesis.strategies as st
@@ -818,16 +836,3 @@ index 3d17592..b194fc5 100644
  # Generic PyTorch accelerator (CUDA/XPU/...) probes, used for tests that only
  # need "some" accelerator rather than a hardcoded backend.
  accelerator_unavailable: tuple[bool, str] = (
-@@ -271,10 +288,10 @@ def cpu_only() -> st.SearchStrategy[list[torch.device]]:
- def use_cpu_strategy() -> st.SearchStrategy[bool]:
-     return (
-         st.booleans()
--        if (gpu_available and not TEST_WITH_ROCM)
-+        if (accelerator_available and not TEST_WITH_ROCM)
-         # fmt: off
-         else st.just(False)
--        if (gpu_available and TEST_WITH_ROCM)
-+        if (accelerator_available and TEST_WITH_ROCM)
-         else st.just(True)
-         # fmt: on
-     )
