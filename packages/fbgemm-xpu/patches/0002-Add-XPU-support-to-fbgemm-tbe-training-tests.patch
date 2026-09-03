@@ -1,4 +1,4 @@
-From ab639d375a310e62f601d4253526566db955df8e Mon Sep 17 00:00:00 2001
+From 3d1196d5e3838f583ae0bee26371247c4bc0a18e Mon Sep 17 00:00:00 2001
 From: Alberto Gallegos <alberto.gallegos.muro@intel.com>
 Date: Tue, 21 Jul 2026 17:56:36 +0000
 Subject: [PATCH] Add XPU support to FBGEMM TBE training frontend and tests
@@ -8,16 +8,17 @@ Extend the shared TBE frontend with ComputeDevice.XPU and accelerator-aware Spli
 Exercise the production constructors in the forward, dense backward, and rowwise Adagrad tests without private-state shims or collection-time monkey-patching. Keep unsupported XPU variants conditionally skipped without reducing CUDA or CPU coverage.
 
 Signed-off-by: Alberto Gallegos <alberto.gallegos.muro@intel.com>
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 ---
- ...t_table_batched_embeddings_ops_training.py | 40 ++++++---
+ ...t_table_batched_embeddings_ops_training.py | 40 +++++++---
  .../fbgemm_gpu/tbe/config/embedding_config.py | 11 ++-
  fbgemm_gpu/fbgemm_gpu/tbe/utils/common.py     |  6 ++
- .../tbe/training/backward_adagrad_common.py   | 71 +++++++++++++---
+ .../tbe/training/backward_adagrad_common.py   | 54 ++++++++++++-
  .../tbe/training/backward_adagrad_test.py     | 33 +++++---
- .../test/tbe/training/backward_dense_test.py  | 33 ++++++--
- fbgemm_gpu/test/tbe/training/forward_test.py  | 81 +++++++++++++++----
- fbgemm_gpu/test/test_utils.py                 | 29 ++++++-
- 8 files changed, 244 insertions(+), 60 deletions(-)
+ .../test/tbe/training/backward_dense_test.py  | 26 ++++++-
+ fbgemm_gpu/test/tbe/training/forward_test.py  | 77 +++++++++++++++----
+ fbgemm_gpu/test/test_utils.py                 | 21 ++++-
+ 8 files changed, 224 insertions(+), 44 deletions(-)
 
 diff --git a/fbgemm_gpu/fbgemm_gpu/split_table_batched_embeddings_ops_training.py b/fbgemm_gpu/fbgemm_gpu/split_table_batched_embeddings_ops_training.py
 index 688e535..609453d 100644
@@ -174,7 +175,7 @@ index 5ea148d..f9df9f4 100644
          # pyre-fixme[7]: Expected `Deviceable` but got `Union[Tensor, torch.nn.EmbeddingBag]`.
          return t.to(device="mtia")
 diff --git a/fbgemm_gpu/test/tbe/training/backward_adagrad_common.py b/fbgemm_gpu/test/tbe/training/backward_adagrad_common.py
-index 28fc0a4..be0aada 100755
+index 28fc0a4..0d854b1 100755
 --- a/fbgemm_gpu/test/tbe/training/backward_adagrad_common.py
 +++ b/fbgemm_gpu/test/tbe/training/backward_adagrad_common.py
 @@ -14,6 +14,7 @@ import numpy as np
@@ -185,16 +186,15 @@ index 28fc0a4..be0aada 100755
      CacheAlgorithm,
      EmbeddingLocation,
      PoolingMode,
-@@ -43,31 +44,38 @@ from ..common import (  # noqa E402
+@@ -43,29 +44,35 @@ from ..common import (  # noqa E402
  if open_source:
      # pyre-ignore[21]
      from test_utils import (
 +        accelerator_available,
 +        accelerator_unavailable,
          additional_decorators,
--        gpu_available,
-+        cuda_available,
 +        current_accelerator,
+         gpu_available,
          gpu_memory_lt_gb,
 -        gpu_unavailable,
          gradcheck,
@@ -202,8 +202,7 @@ index 28fc0a4..be0aada 100755
          skipIfNotRocm,
          skipIfRocm,
          TEST_WITH_ROCM,
--        use_cpu_strategy,
-+        use_cpu_or_accelerator_strategy,
+         use_cpu_strategy,
 +        xpu_only,
      )
  else:
@@ -211,9 +210,8 @@ index 28fc0a4..be0aada 100755
 +        accelerator_available,
 +        accelerator_unavailable,
          additional_decorators,
--        gpu_available,
-+        cuda_available,
 +        current_accelerator,
+         gpu_available,
          gpu_memory_lt_gb,
 -        gpu_unavailable,
          gradcheck,
@@ -221,21 +219,13 @@ index 28fc0a4..be0aada 100755
          skipIfNotRocm,
          skipIfRocm,
          TEST_WITH_ROCM,
--        use_cpu_strategy,
-+        use_cpu_or_accelerator_strategy,
+         use_cpu_strategy,
 +        xpu_only,
      )
 
-+
  VERBOSITY: Verbosity = Verbosity.verbose
-
- common_strategy: dict[str, Any] = {
-@@ -83,10 +91,10 @@ common_strategy: dict[str, Any] = {
-     "mixed": st.booleans(),
-     "use_cache": st.booleans(),
-     "cache_algorithm": st.sampled_from(CacheAlgorithm),
--    "use_cpu": use_cpu_strategy(),
-+    "use_cpu": use_cpu_or_accelerator_strategy(),
+@@ -86,7 +93,7 @@ common_strategy: dict[str, Any] = {
+     "use_cpu": use_cpu_strategy(),
      "output_dtype": (
          st.sampled_from([SparseType.FP32, SparseType.FP16, SparseType.BF16])
 -        if gpu_available
@@ -243,11 +233,10 @@ index 28fc0a4..be0aada 100755
          else st.sampled_from([SparseType.FP32, SparseType.FP16])
      ),
  }
-@@ -152,7 +160,31 @@ def execute_backward_adagrad(  # noqa C901
+@@ -152,6 +159,32 @@ def execute_backward_adagrad(  # noqa C901
      # Disable dynamo tests due to unknown failure
      assume(not compile)
 
--    emb_op = SplitTableBatchedEmbeddingBagsCodegen
 +    # XPU only implements no-bag / unweighted / non-VBE / non-GWD / uniform-B
 +    # rowwise Adagrad without cache, stochastic rounding, weight decay or
 +    # max-norm.  Filter unsupported combos out of the hypothesis space.
@@ -273,10 +262,11 @@ index 28fc0a4..be0aada 100755
 +                and output_dtype == SparseType.BF16
 +            )
 +        )
++
+     emb_op = SplitTableBatchedEmbeddingBagsCodegen
 
      if pooling_mode == PoolingMode.SUM:
-         mode = "sum"
-@@ -215,6 +247,9 @@ def execute_backward_adagrad(  # noqa C901
+@@ -215,6 +248,9 @@ def execute_backward_adagrad(  # noqa C901
      elif use_cpu:
          managed = [EmbeddingLocation.HOST] * T
          compute_device = ComputeDevice.CPU
@@ -286,16 +276,7 @@ index 28fc0a4..be0aada 100755
      elif TEST_WITH_ROCM:
          # ROCm managed memory allocation is under development
          managed = [EmbeddingLocation.DEVICE] * T
-@@ -267,7 +302,7 @@ def execute_backward_adagrad(  # noqa C901
-     cc = (
-         tbe_op
-         if tbe_op
--        else emb_op(
-+        else SplitTableBatchedEmbeddingBagsCodegen(
-             embedding_specs=[
-                 (E, D, M, compute_device) for (E, D, M) in zip(Es, Ds, managed)
-             ],
-@@ -280,6 +315,12 @@ def execute_backward_adagrad(  # noqa C901
+@@ -280,6 +316,12 @@ def execute_backward_adagrad(  # noqa C901
              stochastic_rounding=stochastic_rounding,
              pooling_mode=pooling_mode,
              output_dtype=output_dtype,
@@ -308,7 +289,7 @@ index 28fc0a4..be0aada 100755
          )
      )
      # TODO: make it compile for CPU and unweighted
-@@ -488,6 +529,12 @@ def execute_backward_adagrad(  # noqa C901
+@@ -488,6 +530,12 @@ def execute_backward_adagrad(  # noqa C901
      if tbe_op:
          return
 
@@ -321,24 +302,6 @@ index 28fc0a4..be0aada 100755
      # Free large tensors no longer needed before gradcheck to reduce GPU memory pressure
      del bs, bs_features, fs, gos, goc, fc2, ref_output
      del split_optimizer_states, get_optimizer_states, xs, xws
-@@ -498,7 +545,7 @@ def execute_backward_adagrad(  # noqa C901
-         D_gradcheck = (D_gradcheck + 15) // 16 * 4
-     else:
-         D_gradcheck = D_gradcheck * 4
--    cc = emb_op(
-+    cc = SplitTableBatchedEmbeddingBagsCodegen(
-         embedding_specs=[
-             (E, D_gradcheck, M, compute_device) for (E, M) in zip(Es, managed)
-         ],
-@@ -562,7 +609,7 @@ def execute_backward_adagrad(  # noqa C901
-     y.sum().backward()
-     indice_weight_grad_mask = per_sample_weights.grad.clone().cpu()
-
--    if gpu_available and not TEST_WITH_ROCM:
-+    if cuda_available and not TEST_WITH_ROCM:
-         torch.cuda.synchronize()
-
-     acc_B = 0
 diff --git a/fbgemm_gpu/test/tbe/training/backward_adagrad_test.py b/fbgemm_gpu/test/tbe/training/backward_adagrad_test.py
 index f6c1cea..eca6478 100644
 --- a/fbgemm_gpu/test/tbe/training/backward_adagrad_test.py
@@ -505,7 +468,7 @@ index f6c1cea..eca6478 100644
          """
          Test execute_backward_adagrad with a pre-created TBE op.
 diff --git a/fbgemm_gpu/test/tbe/training/backward_dense_test.py b/fbgemm_gpu/test/tbe/training/backward_dense_test.py
-index 93dd820..a96d5ad 100644
+index 93dd820..0a3faa8 100644
 --- a/fbgemm_gpu/test/tbe/training/backward_dense_test.py
 +++ b/fbgemm_gpu/test/tbe/training/backward_dense_test.py
 @@ -36,13 +36,22 @@ from ..common import (
@@ -518,7 +481,7 @@ index 93dd820..a96d5ad 100644
 +        current_accelerator,
 +        gradcheck,
 +        optests,
-+        use_cpu_or_accelerator_strategy,
++        use_cpu_strategy,
 +        xpu_only,
 +    )
  else:
@@ -527,26 +490,15 @@ index 93dd820..a96d5ad 100644
 +        current_accelerator,
          gradcheck,
          optests,
--        use_cpu_strategy,
-+        use_cpu_or_accelerator_strategy,
+         use_cpu_strategy,
 +        xpu_only,
      )
 
 
-@@ -69,7 +78,7 @@ class BackwardDenseTest(unittest.TestCase):
-                 PoolingMode.NONE,
-             ]
-         ),
--        use_cpu=use_cpu_strategy(),
-+        use_cpu=use_cpu_or_accelerator_strategy(),
-         output_dtype=st.sampled_from(
-             [SparseType.FP32, SparseType.FP16, SparseType.BF16]
-         ),
-@@ -106,7 +115,13 @@ class BackwardDenseTest(unittest.TestCase):
+@@ -106,7 +115,15 @@ class BackwardDenseTest(unittest.TestCase):
          assume(not weighted or pooling_mode != PoolingMode.NONE)
          assume(not mixed_B or (not use_cpu and pooling_mode != PoolingMode.NONE))
 
--        emb_op = DenseTableBatchedEmbeddingBagsCodegen
 +        # XPU only implements no-bag / unweighted / non-VBE / non-GWD / uniform-B.
 +        if xpu_only and not use_cpu:
 +            assume(pooling_mode == PoolingMode.NONE)
@@ -554,27 +506,20 @@ index 93dd820..a96d5ad 100644
 +            assume(not mixed)
 +            assume(not mixed_B)
 +
+         emb_op = DenseTableBatchedEmbeddingBagsCodegen
++
          if pooling_mode == PoolingMode.SUM:
              mode = "sum"
              do_pooling = True
-@@ -208,14 +223,14 @@ class BackwardDenseTest(unittest.TestCase):
-         if weights_precision == SparseType.FP16 and not use_cpu:
-             grad_weights = grad_weights.half()
-
--        cc = emb_op(
-+        cc = DenseTableBatchedEmbeddingBagsCodegen(
-             embedding_specs=[(E, D) for (E, D) in zip(Es, Ds)],
-             pooling_mode=pooling_mode,
+@@ -214,6 +231,7 @@ class BackwardDenseTest(unittest.TestCase):
              use_cpu=use_cpu,
              weights_precision=weights_precision,
              output_dtype=output_dtype,
 +            device=current_accelerator() if xpu_only and not use_cpu else None,
          )
--        # Test torch JIT script compatibility
+         # Test torch JIT script compatibility
          if not use_cpu:
-             cc = torch.jit.script(cc)
-
-@@ -281,6 +296,12 @@ class BackwardDenseTest(unittest.TestCase):
+@@ -281,6 +299,12 @@ class BackwardDenseTest(unittest.TestCase):
              rtol=tol,
          )
 
@@ -588,7 +533,7 @@ index 93dd820..a96d5ad 100644
              [(E, D) for (E, D) in zip(Es, Ds)],
              # NOTE: only SUM pooling can work with per_sample_weights!
 diff --git a/fbgemm_gpu/test/tbe/training/forward_test.py b/fbgemm_gpu/test/tbe/training/forward_test.py
-index 0ec9383..af5d631 100644
+index 0ec9383..98a6424 100644
 --- a/fbgemm_gpu/test/tbe/training/forward_test.py
 +++ b/fbgemm_gpu/test/tbe/training/forward_test.py
 @@ -19,6 +19,7 @@ import numpy as np
@@ -630,11 +575,10 @@ index 0ec9383..af5d631 100644
  VERBOSITY: Verbosity = Verbosity.verbose
 
  fp8_dtype: torch.dtype = (
-@@ -170,7 +176,29 @@ class ForwardTest(unittest.TestCase):
+@@ -170,7 +176,31 @@ class ForwardTest(unittest.TestCase):
          # NOTE: Raw embedding streaming not supported on CPU
          assume(not enable_raw_embedding_streaming or not use_cpu)
 
--        emb_op = SplitTableBatchedEmbeddingBagsCodegen
 +        # XPU only implements no-bag / unweighted / non-VBE / non-cache /
 +        # rowwise-Adagrad forward.  The GPU test-method helpers pick most of
 +        # these parameters via `random.choice` inside their bodies, so filter
@@ -658,10 +602,12 @@ index 0ec9383..af5d631 100644
 +            ):
 +                output_dtype = SparseType.FP32
 +
+         emb_op = SplitTableBatchedEmbeddingBagsCodegen
++
          if pooling_mode == PoolingMode.SUM:
              mode = "sum"
              do_pooling = True
-@@ -211,6 +239,9 @@ class ForwardTest(unittest.TestCase):
+@@ -211,6 +241,9 @@ class ForwardTest(unittest.TestCase):
          if use_cpu:
              managed = [EmbeddingLocation.HOST] * T
              compute_device = ComputeDevice.CPU
@@ -671,16 +617,7 @@ index 0ec9383..af5d631 100644
          elif TEST_WITH_ROCM:
              # ROCm managed memory allocation is under development
              managed = [EmbeddingLocation.DEVICE] * T
-@@ -307,7 +338,7 @@ class ForwardTest(unittest.TestCase):
-             )
-
-         # Create a TBE op
--        cc = emb_op(
-+        cc = SplitTableBatchedEmbeddingBagsCodegen(
-             embedding_specs=[
-                 (
-                     E,
-@@ -319,7 +350,11 @@ class ForwardTest(unittest.TestCase):
+@@ -319,7 +352,11 @@ class ForwardTest(unittest.TestCase):
              ],
              weights_precision=weights_precision,
              optimizer=(
@@ -693,7 +630,7 @@ index 0ec9383..af5d631 100644
              ),
              learning_rate=0.05,
              cache_algorithm=cache_algorithm,
-@@ -329,8 +364,13 @@ class ForwardTest(unittest.TestCase):
+@@ -329,6 +366,12 @@ class ForwardTest(unittest.TestCase):
              prefetch_pipeline=prefetch_pipeline,
              enable_raw_embedding_streaming=enable_raw_embedding_streaming,
              res_params=res_params,
@@ -704,11 +641,9 @@ index 0ec9383..af5d631 100644
 +                else BoundsCheckMode.WARNING
 +            ),
          )
--        # Test torch JIT script compatibility
+         # Test torch JIT script compatibility
          if not use_cpu:
-             cc = torch.jit.script(cc)
-
-@@ -636,7 +676,7 @@ class ForwardTest(unittest.TestCase):
+@@ -636,7 +679,7 @@ class ForwardTest(unittest.TestCase):
              use_experimental_tbe,
          )
 
@@ -717,7 +652,7 @@ index 0ec9383..af5d631 100644
      @given(
          use_experimental_tbe=st.booleans() if not TEST_WITH_ROCM else st.just(False),
      )
-@@ -656,7 +696,7 @@ class ForwardTest(unittest.TestCase):
+@@ -656,7 +699,7 @@ class ForwardTest(unittest.TestCase):
              use_experimental_tbe,
          )
 
@@ -726,7 +661,7 @@ index 0ec9383..af5d631 100644
      @given(
          use_experimental_tbe=st.booleans() if not TEST_WITH_ROCM else st.just(False),
      )
-@@ -665,6 +705,7 @@ class ForwardTest(unittest.TestCase):
+@@ -665,6 +708,7 @@ class ForwardTest(unittest.TestCase):
          max_examples=MAX_EXAMPLES_LONG_RUNNING,
          deadline=None,
      )
@@ -734,7 +669,7 @@ index 0ec9383..af5d631 100644
      def test_forward_gpu_no_cache_fp16_large(
          self,
          use_experimental_tbe: bool,
-@@ -695,7 +736,7 @@ class ForwardTest(unittest.TestCase):
+@@ -695,7 +739,7 @@ class ForwardTest(unittest.TestCase):
              use_experimental_tbe,
          )
 
@@ -743,7 +678,7 @@ index 0ec9383..af5d631 100644
      @unittest.skipIf(
          not torch.version.hip,
          "V2 kernel overflow test is specific to ROCm - skipping on non-ROCm platforms",
-@@ -822,7 +863,8 @@ class ForwardTest(unittest.TestCase):
+@@ -822,7 +866,8 @@ class ForwardTest(unittest.TestCase):
              )
 
      @optests.dontGenerateOpCheckTests("FP8 compute requires custom op support.")
@@ -753,7 +688,7 @@ index 0ec9383..af5d631 100644
      def test_forward_gpu_no_cache_fp8(
          self,
          use_experimental_tbe: bool = False,  # TODO This does not yet work when True.
-@@ -880,7 +922,7 @@ class ForwardTest(unittest.TestCase):
+@@ -880,7 +925,7 @@ class ForwardTest(unittest.TestCase):
              use_experimental_tbe,
          )
 
@@ -762,15 +697,7 @@ index 0ec9383..af5d631 100644
      @given(
          use_experimental_tbe=st.booleans(),
      )
-@@ -954,6 +996,7 @@ class ForwardTest(unittest.TestCase):
-         max_examples=MAX_EXAMPLES_LONG_RUNNING,
-         deadline=None,
-     )
-+    @unittest.skipIf(xpu_only, "UVM cache is not implemented on XPU")
-     def test_forward_gpu_uvm_cache_int8(
-         self,
-         cache_algorithm: CacheAlgorithm,
-@@ -1009,7 +1052,7 @@ class ForwardTest(unittest.TestCase):
+@@ -1009,7 +1054,7 @@ class ForwardTest(unittest.TestCase):
              False,  # use_experimental_tbe
          )
 
@@ -779,7 +706,7 @@ index 0ec9383..af5d631 100644
      @optests.dontGenerateOpCheckTests("FP8 compute requires custom op support.")
      @given(
          cache_algorithm=st.sampled_from(CacheAlgorithm),
-@@ -1019,6 +1062,7 @@ class ForwardTest(unittest.TestCase):
+@@ -1019,6 +1064,7 @@ class ForwardTest(unittest.TestCase):
          max_examples=MAX_EXAMPLES_LONG_RUNNING,
          deadline=None,
      )
@@ -787,7 +714,7 @@ index 0ec9383..af5d631 100644
      def test_forward_gpu_uvm_cache_fp8(
          self,
          cache_algorithm: CacheAlgorithm,
-@@ -1078,7 +1122,7 @@ class ForwardTest(unittest.TestCase):
+@@ -1078,7 +1124,7 @@ class ForwardTest(unittest.TestCase):
              False,  # use_experimental_tbe
          )
 
@@ -796,7 +723,7 @@ index 0ec9383..af5d631 100644
      @given(
          cache_algorithm=st.sampled_from(CacheAlgorithm),
          use_experimental_tbe=st.booleans(),
-@@ -1147,7 +1191,7 @@ class ForwardTest(unittest.TestCase):
+@@ -1147,7 +1193,7 @@ class ForwardTest(unittest.TestCase):
              use_experimental_tbe,
          )
 
@@ -805,7 +732,7 @@ index 0ec9383..af5d631 100644
      @given(
          cache_algorithm=st.sampled_from(CacheAlgorithm),
          use_experimental_tbe=st.booleans(),
-@@ -1216,7 +1260,7 @@ class ForwardTest(unittest.TestCase):
+@@ -1216,7 +1262,7 @@ class ForwardTest(unittest.TestCase):
              use_experimental_tbe,
          )
 
@@ -814,7 +741,7 @@ index 0ec9383..af5d631 100644
      @given(
          T=st.integers(min_value=1, max_value=10),
          D=st.integers(min_value=2, max_value=128),
-@@ -1230,6 +1274,7 @@ class ForwardTest(unittest.TestCase):
+@@ -1230,6 +1276,7 @@ class ForwardTest(unittest.TestCase):
          max_examples=MAX_EXAMPLES_LONG_RUNNING,
          deadline=None,
      )
@@ -822,7 +749,7 @@ index 0ec9383..af5d631 100644
      def test_forward_fused_pooled_emb_quant(
          self,
          T: int,
-@@ -1347,7 +1392,7 @@ class ForwardTest(unittest.TestCase):
+@@ -1347,7 +1394,7 @@ class ForwardTest(unittest.TestCase):
          # Allow some flexibility in call count due to caching behavior
          self.assertLessEqual(mock_raw_embedding_stream.call_count, expected_calls + 2)
 
@@ -831,7 +758,7 @@ index 0ec9383..af5d631 100644
      @given(
          T=st.integers(min_value=1, max_value=5),
          D=st.integers(min_value=2, max_value=64),
-@@ -1366,6 +1411,7 @@ class ForwardTest(unittest.TestCase):
+@@ -1366,6 +1413,7 @@ class ForwardTest(unittest.TestCase):
          max_examples=MAX_EXAMPLES_LONG_RUNNING,
          deadline=None,
      )
@@ -839,7 +766,7 @@ index 0ec9383..af5d631 100644
      def test_forward_raw_embedding_streaming(
          self,
          T: int,
-@@ -1418,7 +1464,7 @@ class ForwardTest(unittest.TestCase):
+@@ -1418,7 +1466,7 @@ class ForwardTest(unittest.TestCase):
                  mock_streamer_instance, num_iterations, prefetch_pipeline, L
              )
 
@@ -848,7 +775,7 @@ index 0ec9383..af5d631 100644
      @unittest.skipIf(*running_in_oss)
      @given(
          T=st.integers(min_value=2, max_value=8),
-@@ -1435,6 +1481,7 @@ class ForwardTest(unittest.TestCase):
+@@ -1435,6 +1483,7 @@ class ForwardTest(unittest.TestCase):
          max_examples=MAX_EXAMPLES_LONG_RUNNING,
          deadline=None,
      )
@@ -857,7 +784,7 @@ index 0ec9383..af5d631 100644
          self,
          T: int,
 diff --git a/fbgemm_gpu/test/test_utils.py b/fbgemm_gpu/test/test_utils.py
-index 3d17592..cb1f497 100644
+index 3d17592..b194fc5 100644
 --- a/fbgemm_gpu/test/test_utils.py
 +++ b/fbgemm_gpu/test/test_utils.py
 @@ -21,6 +21,14 @@ import hypothesis.strategies as st
@@ -875,45 +802,32 @@ index 3d17592..cb1f497 100644
  _suppressed_health_checks: list[HealthCheck] = [
      HealthCheck.filter_too_much,
      HealthCheck.data_too_large,
-@@ -58,6 +66,17 @@ additional_decorators: dict[str, list[Callable[..., Any]]] = {
-     ],
- }
+@@ -66,6 +74,15 @@ gpu_unavailable: tuple[bool, str] = (
+ # Used for `if` statements inside tests
+ gpu_available: bool = not gpu_unavailable[0]
 
-+# Used for `if` statements inside tests
-+cuda_available: bool = (
-+    torch.cuda.is_available() and torch.cuda.device_count() > 0
-+)
++# Used for `@unittest.skipIf`
 +xpu_unavailable: tuple[bool, str] = (
 +    not torch.xpu.is_available() or torch.xpu.device_count() == 0,
 +    "XPU is not available or no XPU devices were detected",
 +)
++# Used for `if` statements inside tests
 +xpu_available: bool = not xpu_unavailable[0]
-+xpu_only: bool = xpu_available and not cuda_available
++xpu_only: bool = xpu_available and not gpu_available
 +
- # Used for `@unittest.skipIf`
- gpu_unavailable: tuple[bool, str] = (
-     not torch.cuda.is_available() or torch.cuda.device_count() == 0,
-@@ -81,7 +100,7 @@ def current_accelerator() -> torch.device | None:
-     return torch.accelerator.current_accelerator() if accelerator_available else None
-
-
--is_nvidia_device: bool = gpu_available and torch.version.cuda is not None
-+is_nvidia_device: bool = cuda_available and torch.version.cuda is not None
-
- # Used for `@unittest.skipIf` for tests that pass in internal CI, but fail on the GitHub runners
- running_on_github: tuple[bool, str] = (
-@@ -280,6 +299,14 @@ def use_cpu_strategy() -> st.SearchStrategy[bool]:
-     )
-
-
-+def use_cpu_or_accelerator_strategy() -> st.SearchStrategy[bool]:
-+    if accelerator_available and not TEST_WITH_ROCM:
-+        return st.booleans()
-+    if accelerator_available and TEST_WITH_ROCM:
-+        return st.just(False)
-+    return st.just(True)
-+
-+
- def gpu_memory_lt_gb(x: int) -> tuple[bool, str]:
-     assert x > 0, "GB value must be positive"
+ # Generic PyTorch accelerator (CUDA/XPU/...) probes, used for tests that only
+ # need "some" accelerator rather than a hardcoded backend.
+ accelerator_unavailable: tuple[bool, str] = (
+@@ -271,10 +288,10 @@ def cpu_only() -> st.SearchStrategy[list[torch.device]]:
+ def use_cpu_strategy() -> st.SearchStrategy[bool]:
      return (
+         st.booleans()
+-        if (gpu_available and not TEST_WITH_ROCM)
++        if (accelerator_available and not TEST_WITH_ROCM)
+         # fmt: off
+         else st.just(False)
+-        if (gpu_available and TEST_WITH_ROCM)
++        if (accelerator_available and TEST_WITH_ROCM)
+         else st.just(True)
+         # fmt: on
+     )
