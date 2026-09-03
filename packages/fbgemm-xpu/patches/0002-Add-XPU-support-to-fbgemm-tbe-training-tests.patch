@@ -1,4 +1,4 @@
-From 26bb2c7cbea2ca973daad41623208714569da269 Mon Sep 17 00:00:00 2001
+From 841fb298842968f7d09b1d26cc60df63920d36ce Mon Sep 17 00:00:00 2001
 From: Alberto Gallegos <alberto.gallegos.muro@intel.com>
 Date: Tue, 21 Jul 2026 17:56:36 +0000
 Subject: [PATCH] Add XPU support to FBGEMM TBE training frontend and tests
@@ -17,8 +17,8 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  .../tbe/training/backward_adagrad_test.py     | 33 +++++---
  .../test/tbe/training/backward_dense_test.py  | 34 +++++++-
  fbgemm_gpu/test/tbe/training/forward_test.py  | 77 +++++++++++++++----
- fbgemm_gpu/test/test_utils.py                 | 17 ++++
- 8 files changed, 235 insertions(+), 47 deletions(-)
+ fbgemm_gpu/test/test_utils.py                 | 16 ++++
+ 8 files changed, 234 insertions(+), 47 deletions(-)
 
 diff --git a/fbgemm_gpu/fbgemm_gpu/split_table_batched_embeddings_ops_training.py b/fbgemm_gpu/fbgemm_gpu/split_table_batched_embeddings_ops_training.py
 index 688e535..609453d 100644
@@ -175,7 +175,7 @@ index 5ea148d..f9df9f4 100644
          # pyre-fixme[7]: Expected `Deviceable` but got `Union[Tensor, torch.nn.EmbeddingBag]`.
          return t.to(device="mtia")
 diff --git a/fbgemm_gpu/test/tbe/training/backward_adagrad_common.py b/fbgemm_gpu/test/tbe/training/backward_adagrad_common.py
-index 28fc0a4..341ce83 100755
+index 28fc0a4..53ef1de 100755
 --- a/fbgemm_gpu/test/tbe/training/backward_adagrad_common.py
 +++ b/fbgemm_gpu/test/tbe/training/backward_adagrad_common.py
 @@ -14,6 +14,7 @@ import numpy as np
@@ -203,7 +203,7 @@ index 28fc0a4..341ce83 100755
          skipIfRocm,
          TEST_WITH_ROCM,
 -        use_cpu_strategy,
-+        xpu_only,
++        xpu_available,
      )
  else:
      from fbgemm_gpu.test.test_utils import (  # noqa F401
@@ -220,7 +220,7 @@ index 28fc0a4..341ce83 100755
          skipIfRocm,
          TEST_WITH_ROCM,
 -        use_cpu_strategy,
-+        xpu_only,
++        xpu_available,
      )
 
  VERBOSITY: Verbosity = Verbosity.verbose
@@ -248,7 +248,7 @@ index 28fc0a4..341ce83 100755
 +    # max-norm.  Reject the combos a caller sets deliberately, but narrow the
 +    # rest: filtering on all of them at once leaves the FP16 tests
 +    # unsatisfiable, since the CPU path is already excluded for FP16 weights.
-+    if xpu_only and not use_cpu:
++    if xpu_available and not use_cpu:
 +        assume(pooling_mode == PoolingMode.NONE)
 +        assume(not weighted)
 +        assume(not mixed)
@@ -265,7 +265,7 @@ index 28fc0a4..341ce83 100755
 +    # `use_cpu=True` cases too.
 +    # The CPU wheel does not implement BF16 for the no-bag forward
 +    # (`split_embedding_nobag_cpu_forward_1`), so filter that combo out.
-+    if xpu_only and use_cpu:
++    if xpu_available and use_cpu:
 +        assume(
 +            not (
 +                pooling_mode == PoolingMode.NONE
@@ -280,7 +280,7 @@ index 28fc0a4..341ce83 100755
      elif use_cpu:
          managed = [EmbeddingLocation.HOST] * T
          compute_device = ComputeDevice.CPU
-+    elif xpu_only:
++    elif xpu_available:
 +        managed = [EmbeddingLocation.DEVICE] * T
 +        compute_device = ComputeDevice.XPU
      elif TEST_WITH_ROCM:
@@ -290,10 +290,10 @@ index 28fc0a4..341ce83 100755
              stochastic_rounding=stochastic_rounding,
              pooling_mode=pooling_mode,
              output_dtype=output_dtype,
-+            device=current_accelerator() if xpu_only and not use_cpu else None,
++            device=current_accelerator() if xpu_available and not use_cpu else None,
 +            bounds_check_mode=(
 +                BoundsCheckMode.NONE
-+                if xpu_only and not use_cpu
++                if xpu_available and not use_cpu
 +                else BoundsCheckMode.WARNING
 +            ),
          )
@@ -306,14 +306,14 @@ index 28fc0a4..341ce83 100755
 +    # The per-sample-weights + gradcheck sub-block that follows re-instantiates
 +    # the codegen module with `PoolingMode.SUM` (weighted route), which is not
 +    # implemented on XPU.  Skip the remainder of the function on XPU.
-+    if xpu_only and not use_cpu:
++    if xpu_available and not use_cpu:
 +        return
 +
      # Free large tensors no longer needed before gradcheck to reduce GPU memory pressure
      del bs, bs_features, fs, gos, goc, fc2, ref_output
      del split_optimizer_states, get_optimizer_states, xs, xws
 diff --git a/fbgemm_gpu/test/tbe/training/backward_adagrad_test.py b/fbgemm_gpu/test/tbe/training/backward_adagrad_test.py
-index f6c1cea..eca6478 100644
+index f6c1cea..16f74ff 100644
 --- a/fbgemm_gpu/test/tbe/training/backward_adagrad_test.py
 +++ b/fbgemm_gpu/test/tbe/training/backward_adagrad_test.py
 @@ -30,6 +30,7 @@ from hypothesis import given, settings
@@ -334,7 +334,7 @@ index f6c1cea..eca6478 100644
      skipIfNotRocm,
      SparseType,
      st,
-+    xpu_only,
++    xpu_available,
  )
 
  # Set up test strategy
@@ -346,7 +346,7 @@ index f6c1cea..eca6478 100644
 +    @unittest.skipIf(*accelerator_unavailable)
      @given(mixed_B=st.booleans(), **test_st)
      @settings(**common_settings)
-+    @unittest.skipIf(xpu_only, "Pooled rowwise Adagrad is not implemented on XPU")
++    @unittest.skipIf(xpu_available, "Pooled rowwise Adagrad is not implemented on XPU")
      def test_backward_adagrad_fp16_pmSUM(  # noqa C901
          self,
          **kwargs: Any,
@@ -358,7 +358,7 @@ index f6c1cea..eca6478 100644
 +    @unittest.skipIf(*accelerator_unavailable)
      @given(mixed_B=st.booleans(), **test_st)
      @settings(**common_settings)
-+    @unittest.skipIf(xpu_only, "FP8 rowwise Adagrad is not implemented on XPU")
++    @unittest.skipIf(xpu_available, "FP8 rowwise Adagrad is not implemented on XPU")
      def test_backward_adagrad_fp8_pmSUM(  # noqa C901
          self,
          **kwargs: Any,
@@ -374,7 +374,7 @@ index f6c1cea..eca6478 100644
          **test_st,
      )
      @settings(**common_settings)
-+    @unittest.skipIf(xpu_only, "Pooled rowwise Adagrad is not implemented on XPU")
++    @unittest.skipIf(xpu_available, "Pooled rowwise Adagrad is not implemented on XPU")
      def test_backward_adagrad_fp16_pmMEAN(  # noqa C901
          self,
          **kwargs: Any,
@@ -391,7 +391,7 @@ index f6c1cea..eca6478 100644
          **test_st,
      )
      @settings(**common_settings)
-+    @unittest.skipIf(xpu_only, "Pooled rowwise Adagrad is not implemented on XPU")
++    @unittest.skipIf(xpu_available, "Pooled rowwise Adagrad is not implemented on XPU")
      def test_backward_adagrad_fp32_pmSUM(  # noqa C901
          self,
          **kwargs: Any,
@@ -399,7 +399,7 @@ index f6c1cea..eca6478 100644
          **test_st,
      )
      @settings(**common_settings)
-+    @unittest.skipIf(xpu_only, "Pooled rowwise Adagrad is not implemented on XPU")
++    @unittest.skipIf(xpu_available, "Pooled rowwise Adagrad is not implemented on XPU")
      def test_backward_adagrad_fp32_pmMEAN(  # noqa C901
          self,
          **kwargs: Any,
@@ -424,7 +424,7 @@ index f6c1cea..eca6478 100644
          **test_st,
      )
      @settings(**common_settings)
-+    @unittest.skipIf(xpu_only, "Max-norm rowwise Adagrad is not implemented on XPU")
++    @unittest.skipIf(xpu_available, "Max-norm rowwise Adagrad is not implemented on XPU")
      def test_backward_adagrad_fp16_pmSUM_with_max_norm(  # noqa C901
          self,
          **kwargs: Any,
@@ -462,7 +462,7 @@ index f6c1cea..eca6478 100644
 -    @unittest.skipIf(*gpu_unavailable)
 +    @unittest.skipIf(*accelerator_unavailable)
      @unittest.skipIf(*gpu_memory_lt_gb(40))
-+    @unittest.skipIf(xpu_only, "Config fixtures include unsupported XPU variants")
++    @unittest.skipIf(xpu_available, "Config fixtures include unsupported XPU variants")
      def test_backward_adagrad_from_config_file(self) -> None:
          """
          Test backward adagrad pass using TBE specs loaded from a JSON file.
@@ -473,12 +473,12 @@ index f6c1cea..eca6478 100644
 -    @unittest.skipIf(*gpu_unavailable)
 +    @unittest.skipIf(*accelerator_unavailable)
      @unittest.skipIf(*gpu_memory_lt_gb(20))
-+    @unittest.skipIf(xpu_only, "Pooled rowwise Adagrad is not implemented on XPU")
++    @unittest.skipIf(xpu_available, "Pooled rowwise Adagrad is not implemented on XPU")
      def test_backward_adagrad_with_simple_tbe_op(self) -> None:
          """
          Test execute_backward_adagrad with a pre-created TBE op.
 diff --git a/fbgemm_gpu/test/tbe/training/backward_dense_test.py b/fbgemm_gpu/test/tbe/training/backward_dense_test.py
-index 93dd820..4acacda 100644
+index 93dd820..4ca225b 100644
 --- a/fbgemm_gpu/test/tbe/training/backward_dense_test.py
 +++ b/fbgemm_gpu/test/tbe/training/backward_dense_test.py
 @@ -36,13 +36,22 @@ from ..common import (
@@ -492,7 +492,7 @@ index 93dd820..4acacda 100644
 +        current_accelerator,
 +        gradcheck,
 +        optests,
-+        xpu_only,
++        xpu_available,
 +    )
  else:
      from fbgemm_gpu.test.test_utils import (
@@ -502,7 +502,7 @@ index 93dd820..4acacda 100644
          gradcheck,
          optests,
 -        use_cpu_strategy,
-+        xpu_only,
++        xpu_available,
      )
 
 
@@ -522,7 +522,7 @@ index 93dd820..4acacda 100644
          assume(not mixed_B or (not use_cpu and pooling_mode != PoolingMode.NONE))
 
 +        # XPU only implements no-bag / unweighted / non-VBE / non-GWD / uniform-B.
-+        if xpu_only and not use_cpu:
++        if xpu_available and not use_cpu:
 +            assume(pooling_mode == PoolingMode.NONE)
 +            assume(not weighted)
 +            assume(not mixed)
@@ -539,7 +539,7 @@ index 93dd820..4acacda 100644
              use_cpu=use_cpu,
              weights_precision=weights_precision,
              output_dtype=output_dtype,
-+            device=current_accelerator() if xpu_only and not use_cpu else None,
++            device=current_accelerator() if xpu_available and not use_cpu else None,
          )
          # Test torch JIT script compatibility
          if not use_cpu:
@@ -550,14 +550,14 @@ index 93dd820..4acacda 100644
 +        # Weighted / pooled route is not implemented on XPU: skip the
 +        # per-sample-weights + gradcheck sub-test in the XPU-only environment
 +        # before instantiating another CUDA-backed codegen module.
-+        if xpu_only and not use_cpu:
++        if xpu_available and not use_cpu:
 +            return
 +
          cc = DenseTableBatchedEmbeddingBagsCodegen(
              [(E, D) for (E, D) in zip(Es, Ds)],
              # NOTE: only SUM pooling can work with per_sample_weights!
 diff --git a/fbgemm_gpu/test/tbe/training/forward_test.py b/fbgemm_gpu/test/tbe/training/forward_test.py
-index 0ec9383..98a6424 100644
+index 0ec9383..6718c63 100644
 --- a/fbgemm_gpu/test/tbe/training/forward_test.py
 +++ b/fbgemm_gpu/test/tbe/training/forward_test.py
 @@ -19,6 +19,7 @@ import numpy as np
@@ -580,7 +580,7 @@ index 0ec9383..98a6424 100644
          optests,
          running_in_oss,
          TEST_WITH_ROCM,
-+        xpu_only,
++        xpu_available,
      )
  else:
      from fbgemm_gpu.test.test_utils import (
@@ -592,7 +592,7 @@ index 0ec9383..98a6424 100644
          optests,
          running_in_oss,
          TEST_WITH_ROCM,
-+        xpu_only,
++        xpu_available,
      )
 
 +
@@ -608,7 +608,7 @@ index 0ec9383..98a6424 100644
 +        # these parameters via `random.choice` inside their bodies, so filter
 +        # via `assume` (hypothesis) *and* coerce the local parameters so that
 +        # a single hypothesis example is enough to exercise the target op.
-+        if xpu_only and not use_cpu:
++        if xpu_available and not use_cpu:
 +            pooling_mode = PoolingMode.NONE
 +            weighted = False
 +            mixed = False
@@ -635,7 +635,7 @@ index 0ec9383..98a6424 100644
          if use_cpu:
              managed = [EmbeddingLocation.HOST] * T
              compute_device = ComputeDevice.CPU
-+        elif xpu_only:
++        elif xpu_available:
 +            managed = [EmbeddingLocation.DEVICE] * T
 +            compute_device = ComputeDevice.XPU
          elif TEST_WITH_ROCM:
@@ -649,7 +649,7 @@ index 0ec9383..98a6424 100644
 +                # Force rowwise Adagrad on XPU so the forward path exercises
 +                # `split_embedding_codegen_lookup_rowwise_adagrad_function_pt2`.
 +                OptimType.EXACT_ROWWISE_ADAGRAD
-+                if (xpu_only and not use_cpu) or mixed_B
++                if (xpu_available and not use_cpu) or mixed_B
 +                else OptimType.EXACT_SGD
              ),
              learning_rate=0.05,
@@ -658,10 +658,10 @@ index 0ec9383..98a6424 100644
              prefetch_pipeline=prefetch_pipeline,
              enable_raw_embedding_streaming=enable_raw_embedding_streaming,
              res_params=res_params,
-+            device=current_accelerator() if xpu_only and not use_cpu else None,
++            device=current_accelerator() if xpu_available and not use_cpu else None,
 +            bounds_check_mode=(
 +                BoundsCheckMode.NONE
-+                if xpu_only and not use_cpu
++                if xpu_available and not use_cpu
 +                else BoundsCheckMode.WARNING
 +            ),
          )
@@ -689,7 +689,7 @@ index 0ec9383..98a6424 100644
          max_examples=MAX_EXAMPLES_LONG_RUNNING,
          deadline=None,
      )
-+    @unittest.skipIf(xpu_only, "FP16 large-grid test uses torch.cuda APIs")
++    @unittest.skipIf(xpu_available, "FP16 large-grid test uses torch.cuda APIs")
      def test_forward_gpu_no_cache_fp16_large(
          self,
          use_experimental_tbe: bool,
@@ -708,7 +708,7 @@ index 0ec9383..98a6424 100644
      @optests.dontGenerateOpCheckTests("FP8 compute requires custom op support.")
 -    @unittest.skipIf(*gpu_unavailable)
 +    @unittest.skipIf(*accelerator_unavailable)
-+    @unittest.skipIf(xpu_only, "FP8 is not implemented on XPU")
++    @unittest.skipIf(xpu_available, "FP8 is not implemented on XPU")
      def test_forward_gpu_no_cache_fp8(
          self,
          use_experimental_tbe: bool = False,  # TODO This does not yet work when True.
@@ -734,7 +734,7 @@ index 0ec9383..98a6424 100644
          max_examples=MAX_EXAMPLES_LONG_RUNNING,
          deadline=None,
      )
-+    @unittest.skipIf(xpu_only, "UVM cache is not implemented on XPU")
++    @unittest.skipIf(xpu_available, "UVM cache is not implemented on XPU")
      def test_forward_gpu_uvm_cache_fp8(
          self,
          cache_algorithm: CacheAlgorithm,
@@ -769,7 +769,7 @@ index 0ec9383..98a6424 100644
          max_examples=MAX_EXAMPLES_LONG_RUNNING,
          deadline=None,
      )
-+    @unittest.skipIf(xpu_only, "Fused pooled embedding quant is not implemented on XPU")
++    @unittest.skipIf(xpu_available, "Fused pooled embedding quant is not implemented on XPU")
      def test_forward_fused_pooled_emb_quant(
          self,
          T: int,
@@ -786,7 +786,7 @@ index 0ec9383..98a6424 100644
          max_examples=MAX_EXAMPLES_LONG_RUNNING,
          deadline=None,
      )
-+    @unittest.skipIf(xpu_only, "Raw embedding streaming is not implemented on XPU")
++    @unittest.skipIf(xpu_available, "Raw embedding streaming is not implemented on XPU")
      def test_forward_raw_embedding_streaming(
          self,
          T: int,
@@ -803,12 +803,12 @@ index 0ec9383..98a6424 100644
          max_examples=MAX_EXAMPLES_LONG_RUNNING,
          deadline=None,
      )
-+    @unittest.skipIf(xpu_only, "Raw embedding streaming is not implemented on XPU")
++    @unittest.skipIf(xpu_available, "Raw embedding streaming is not implemented on XPU")
      def test_forward_mixed_cache_non_cache_tables_w_raw_embedding_streaming(
          self,
          T: int,
 diff --git a/fbgemm_gpu/test/test_utils.py b/fbgemm_gpu/test/test_utils.py
-index 3d17592..5309435 100644
+index 3d17592..a47aa19 100644
 --- a/fbgemm_gpu/test/test_utils.py
 +++ b/fbgemm_gpu/test/test_utils.py
 @@ -21,6 +21,14 @@ import hypothesis.strategies as st
@@ -826,7 +826,7 @@ index 3d17592..5309435 100644
  _suppressed_health_checks: list[HealthCheck] = [
      HealthCheck.filter_too_much,
      HealthCheck.data_too_large,
-@@ -66,6 +74,15 @@ gpu_unavailable: tuple[bool, str] = (
+@@ -66,6 +74,14 @@ gpu_unavailable: tuple[bool, str] = (
  # Used for `if` statements inside tests
  gpu_available: bool = not gpu_unavailable[0]
 
@@ -837,7 +837,6 @@ index 3d17592..5309435 100644
 +)
 +# Used for `if` statements inside tests
 +xpu_available: bool = not xpu_unavailable[0]
-+xpu_only: bool = xpu_available and not gpu_available
 +
  # Generic PyTorch accelerator (CUDA/XPU/...) probes, used for tests that only
  # need "some" accelerator rather than a hardcoded backend.
