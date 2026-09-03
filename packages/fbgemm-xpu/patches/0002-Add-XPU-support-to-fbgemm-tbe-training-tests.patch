@@ -1,4 +1,4 @@
-From 700f653af645aef8ec18e9b037a621411177156d Mon Sep 17 00:00:00 2001
+From b3dba213efa214b01952f938739ce471711552f2 Mon Sep 17 00:00:00 2001
 From: Alberto Gallegos <alberto.gallegos.muro@intel.com>
 Date: Tue, 21 Jul 2026 17:56:36 +0000
 Subject: [PATCH] Add XPU support to FBGEMM TBE training frontend and tests
@@ -13,12 +13,12 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
  ...t_table_batched_embeddings_ops_training.py | 40 +++++++---
  .../fbgemm_gpu/tbe/config/embedding_config.py | 11 ++-
  fbgemm_gpu/fbgemm_gpu/tbe/utils/common.py     |  6 ++
- .../tbe/training/backward_adagrad_common.py   | 60 +++++++++++++--
+ .../tbe/training/backward_adagrad_common.py   | 62 +++++++++++++--
  .../tbe/training/backward_adagrad_test.py     | 33 +++++---
- .../test/tbe/training/backward_dense_test.py  | 32 +++++++-
+ .../test/tbe/training/backward_dense_test.py  | 34 +++++++-
  fbgemm_gpu/test/tbe/training/forward_test.py  | 77 +++++++++++++++----
  fbgemm_gpu/test/test_utils.py                 | 17 ++++
- 8 files changed, 229 insertions(+), 47 deletions(-)
+ 8 files changed, 233 insertions(+), 47 deletions(-)
 
 diff --git a/fbgemm_gpu/fbgemm_gpu/split_table_batched_embeddings_ops_training.py b/fbgemm_gpu/fbgemm_gpu/split_table_batched_embeddings_ops_training.py
 index 688e535..609453d 100644
@@ -175,7 +175,7 @@ index 5ea148d..f9df9f4 100644
          # pyre-fixme[7]: Expected `Deviceable` but got `Union[Tensor, torch.nn.EmbeddingBag]`.
          return t.to(device="mtia")
 diff --git a/fbgemm_gpu/test/tbe/training/backward_adagrad_common.py b/fbgemm_gpu/test/tbe/training/backward_adagrad_common.py
-index 28fc0a4..acfdcd5 100755
+index 28fc0a4..f1f8f72 100755
 --- a/fbgemm_gpu/test/tbe/training/backward_adagrad_common.py
 +++ b/fbgemm_gpu/test/tbe/training/backward_adagrad_common.py
 @@ -14,6 +14,7 @@ import numpy as np
@@ -239,7 +239,7 @@ index 28fc0a4..acfdcd5 100755
          else st.sampled_from([SparseType.FP32, SparseType.FP16])
      ),
  }
-@@ -152,6 +159,32 @@ def execute_backward_adagrad(  # noqa C901
+@@ -152,6 +159,34 @@ def execute_backward_adagrad(  # noqa C901
      # Disable dynamo tests due to unknown failure
      assume(not compile)
 
@@ -256,6 +256,8 @@ index 28fc0a4..acfdcd5 100755
 +        assume(not stochastic_rounding)
 +        assume(weight_decay_mode == WeightDecayMode.NONE)
 +        assume(max_norm == 0.0)
++        # PyTorch XPU autograd cannot backpropagate empty reference embeddings.
++        assume(L > 0)
 +
 +    # In the XPU-only environment the scoped CPU/accelerator strategy samples
 +    # `use_cpu=True` cases too.
@@ -272,7 +274,7 @@ index 28fc0a4..acfdcd5 100755
      emb_op = SplitTableBatchedEmbeddingBagsCodegen
 
      if pooling_mode == PoolingMode.SUM:
-@@ -215,6 +248,9 @@ def execute_backward_adagrad(  # noqa C901
+@@ -215,6 +250,9 @@ def execute_backward_adagrad(  # noqa C901
      elif use_cpu:
          managed = [EmbeddingLocation.HOST] * T
          compute_device = ComputeDevice.CPU
@@ -282,7 +284,7 @@ index 28fc0a4..acfdcd5 100755
      elif TEST_WITH_ROCM:
          # ROCm managed memory allocation is under development
          managed = [EmbeddingLocation.DEVICE] * T
-@@ -280,6 +316,12 @@ def execute_backward_adagrad(  # noqa C901
+@@ -280,6 +318,12 @@ def execute_backward_adagrad(  # noqa C901
              stochastic_rounding=stochastic_rounding,
              pooling_mode=pooling_mode,
              output_dtype=output_dtype,
@@ -295,7 +297,7 @@ index 28fc0a4..acfdcd5 100755
          )
      )
      # TODO: make it compile for CPU and unweighted
-@@ -488,6 +530,12 @@ def execute_backward_adagrad(  # noqa C901
+@@ -488,6 +532,12 @@ def execute_backward_adagrad(  # noqa C901
      if tbe_op:
          return
 
@@ -474,7 +476,7 @@ index f6c1cea..eca6478 100644
          """
          Test execute_backward_adagrad with a pre-created TBE op.
 diff --git a/fbgemm_gpu/test/tbe/training/backward_dense_test.py b/fbgemm_gpu/test/tbe/training/backward_dense_test.py
-index 93dd820..4e893b6 100644
+index 93dd820..4acacda 100644
 --- a/fbgemm_gpu/test/tbe/training/backward_dense_test.py
 +++ b/fbgemm_gpu/test/tbe/training/backward_dense_test.py
 @@ -36,13 +36,22 @@ from ..common import (
@@ -513,7 +515,7 @@ index 93dd820..4e893b6 100644
          output_dtype=st.sampled_from(
              [SparseType.FP32, SparseType.FP16, SparseType.BF16]
          ),
-@@ -106,7 +117,15 @@ class BackwardDenseTest(unittest.TestCase):
+@@ -106,7 +117,17 @@ class BackwardDenseTest(unittest.TestCase):
          assume(not weighted or pooling_mode != PoolingMode.NONE)
          assume(not mixed_B or (not use_cpu and pooling_mode != PoolingMode.NONE))
 
@@ -523,13 +525,15 @@ index 93dd820..4e893b6 100644
 +            assume(not weighted)
 +            assume(not mixed)
 +            assume(not mixed_B)
++            # PyTorch XPU autograd cannot backpropagate empty reference embeddings.
++            assume(L > 0)
 +
          emb_op = DenseTableBatchedEmbeddingBagsCodegen
 +
          if pooling_mode == PoolingMode.SUM:
              mode = "sum"
              do_pooling = True
-@@ -214,6 +233,7 @@ class BackwardDenseTest(unittest.TestCase):
+@@ -214,6 +235,7 @@ class BackwardDenseTest(unittest.TestCase):
              use_cpu=use_cpu,
              weights_precision=weights_precision,
              output_dtype=output_dtype,
@@ -537,7 +541,7 @@ index 93dd820..4e893b6 100644
          )
          # Test torch JIT script compatibility
          if not use_cpu:
-@@ -281,6 +301,12 @@ class BackwardDenseTest(unittest.TestCase):
+@@ -281,6 +303,12 @@ class BackwardDenseTest(unittest.TestCase):
              rtol=tol,
          )
 
