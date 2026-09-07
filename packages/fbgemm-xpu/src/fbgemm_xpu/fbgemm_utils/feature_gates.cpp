@@ -6,6 +6,7 @@
 
 #include <cstdlib>
 #include <map>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 
@@ -42,6 +43,9 @@ static bool env_check_key(const std::string& key) {
 bool check_feature_gate_key(const std::string& key) {
   // Cache feature flags to avoid repeated environment lookups.
   static std::map<std::string, bool> feature_flags_cache;
+  static std::mutex feature_flags_cache_mutex;
+  const std::lock_guard<std::mutex> guard(feature_flags_cache_mutex);
+
   if (const auto search = feature_flags_cache.find(key);
       search != feature_flags_cache.end()) {
     return search->second;
@@ -49,7 +53,7 @@ bool check_feature_gate_key(const std::string& key) {
 
   const auto value = env_check_key(key);
 
-  feature_flags_cache.insert({key, value});
+  feature_flags_cache.emplace(key, value);
   return value;
 }
 
