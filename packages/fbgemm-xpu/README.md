@@ -35,7 +35,8 @@ operators, registered under the `torch.ops.fbgemm` namespace.
 
   - no-bag lookup (`PoolingMode.NONE`);
   - unweighted lookup;
-  - one table with a uniform batch;
+  - one- and two-table layouts with one or two batches per table and a uniform
+    embedding dimension;
   - FP32 and FP16 weight storage;
   - small and general forward kernels (`D=4` and `D=36`);
   - warp and CTA backward/update paths, including 32 repeated indices for one
@@ -119,9 +120,6 @@ The lookup operators do not currently support:
 - variable batch embeddings (VBE);
 - global weight decay (GWD);
 - cache-backed lookup.
-
-Multi-table lookup is supported by design but is not currently validated by
-direct runtime correctness tests.
 
 The pristine FBGEMM 1.8.0 high-level training frontend does not expose
 `ComputeDevice.XPU`. Constructing
