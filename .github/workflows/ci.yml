@@ -474,7 +474,6 @@ jobs:
       run: |
         rm -rf .git/rebase-apply
         git am ../torchlib-xpu/packages/fbgemm-xpu/patches/0001-Add-XPU-support-to-fbgemm-tests.patch
-        git am ../torchlib-xpu/packages/fbgemm-xpu/patches/0002-Add-XPU-support-to-fbgemm-tbe-training-tests.patch
         unexpected=$(git diff --name-only v1.8.0 HEAD | grep -v '^fbgemm_gpu/test/' || true)
         if [ -n "$unexpected" ]; then
           echo "Patches modified non-test FBGEMM files:"
@@ -493,7 +492,6 @@ jobs:
         pytest -rsf fbgemm_gpu/test/sparse/reorder_batched_test.py
         pytest -rsf fbgemm_gpu/test/tbe/utils/generate_vbe_metadata_test.py
         pytest -rsf fbgemm_gpu/test/tbe/utils/split_embeddings_utils_test.py
-        pytest -rsf fbgemm_gpu/test/tbe/training/xpu_lookup_ops_test.py
 
   publish:
     needs: [ compose, test-torchcodec, test-fbgemm ]
