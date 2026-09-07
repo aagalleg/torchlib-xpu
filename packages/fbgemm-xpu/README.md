@@ -4,20 +4,18 @@
 
 [FBGEMM] is an optimized library for GEMMs and low-precision training. The Intel® XPU plugin for [FBGEMM] enables hardware acceleration for specific [FBGEMM] operators on Intel GPUs using SYCL kernels. Currently, acceleration is primarily targeted for DLRM v3 workloads.
 
-To use Intel® XPU plugin for [FBGEMM], load it in your Python script and ensure tensors are on XPU device:
+To use Intel® XPU plugin for [FBGEMM], load it in your Python script and ensure
+tensors are on an XPU device:
 
 ```python
 import torch
 import fbgemm_xpu
-
-# Usage examples will be added as operators are integrated into this project
 ```
 
 ## Supported operators
 
 This plugin provides Intel® XPU (SYCL) implementations for the following
-operators, registered under the `torch.ops.fbgemm` namespace. Signatures
-and behavior match [FBGEMM].
+operators, registered under the `torch.ops.fbgemm` namespace.
 
 * Implemented [FBGEMM sparse operators][fbgemm-sparse-ops]:
 
@@ -27,6 +25,22 @@ and behavior match [FBGEMM].
   - [`permute_1D_sparse_data`][op-permute_1D_sparse_data]
   - [`permute_2D_sparse_data`][op-permute_2D_sparse_data]
 
+* Training lookup operators:
+
+  - `dense_embedding_codegen_lookup_function`
+  - `split_embedding_codegen_lookup_rowwise_adagrad_function_pt2`
+
+  The lookup operators are currently supported through direct
+  `torch.ops.fbgemm` calls. The validated surface is:
+
+  - no-bag lookup (`PoolingMode.NONE`);
+  - unweighted lookup;
+  - one table with a uniform batch;
+  - FP32 and FP16 weight storage;
+  - small and general forward kernels (`D=4` and `D=36`);
+  - warp and CTA backward/update paths, including 32 repeated indices for one
+    embedding row;
+  - dense autograd and split rowwise-Adagrad in-place update.
 
 The following operators are also implemented but do not constitute
 public documented FBGEMM API. These are extra variants, helpers, or utility
@@ -46,7 +60,8 @@ operators alongside the operators above. You can find their exact signature in
 
 ## Supported hardware
 
-Currently, this package has been tested only on Intel® Data Center GPU Max Series (Ponte Vecchio, PVC) GPUs.
+Currently, this package is tested on Intel® Data Center GPU Max Series
+(Ponte Vecchio, PVC) GPUs and in CI on BMG hardware.
 
 ## Installation
 
@@ -97,7 +112,22 @@ Environment variables will be added as new FBGEMM operators are integrated into 
 
 ## Known limitations
 
-Known limitations will be documented as new FBGEMM operators are integrated into this project.
+The lookup operators do not currently support:
+
+- pooled lookup (`PoolingMode.SUM` or `PoolingMode.MEAN`);
+- weighted lookup;
+- variable batch embeddings (VBE);
+- global weight decay (GWD);
+- cache-backed lookup.
+
+Multi-table lookup is supported by design but is not currently validated by
+direct runtime correctness tests.
+
+The pristine FBGEMM 1.8.0 high-level training frontend does not expose
+`ComputeDevice.XPU`. Constructing
+`SplitTableBatchedEmbeddingBagsCodegen` for XPU is therefore unavailable in
+this release. Importing the plugin and calling the supported lookup operators
+directly through `torch.ops.fbgemm` remains supported.
 
 [FBGEMM]: https://github.com/pytorch/FBGEMM
 [uv]: https://github.com/astral-sh/uv
