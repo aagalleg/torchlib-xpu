@@ -12,5 +12,10 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Module)
 find_package(pybind11 REQUIRED)
 find_package(Torch REQUIRED)
 
+if(NOT CMAKE_CXX_COMPILER MATCHES "icpx")
+    message(FATAL_ERROR "fbgemm-xpu requires Intel oneAPI compiler (icpx) with SYCL support")
+endif()
+message(STATUS "Intel compiler detected: SYCL kernels enabled")
+
 add_subdirectory(src/fbgemm_xpu)
 add_subdirectory(src/codegen)

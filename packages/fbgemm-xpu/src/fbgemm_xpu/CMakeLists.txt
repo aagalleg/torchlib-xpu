@@ -3,15 +3,6 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # --------------------------------------------------------------------------
-# SYCL backend: required for fbgemm-xpu. All kernels are SYCL-based, so the
-# Intel oneAPI compiler (icpx) is mandatory.
-# --------------------------------------------------------------------------
-if(NOT CMAKE_CXX_COMPILER MATCHES "icpx")
-    message(FATAL_ERROR "fbgemm-xpu requires Intel oneAPI compiler (icpx) with SYCL support")
-endif()
-message(STATUS "Intel compiler detected: SYCL kernels enabled")
-
-# --------------------------------------------------------------------------
 # XPU architecture: currently tested only on PVC (Ponte Vecchio).
 # --------------------------------------------------------------------------
 if(NOT "$ENV{TORCH_XPU_ARCH_LIST}" STREQUAL "")
