@@ -27,20 +27,19 @@ operators, registered under the `torch.ops.fbgemm` namespace.
 
 * Training lookup operators supported through direct calls:
 
-  - `torch.ops.fbgemm.dense_embedding_codegen_lookup_function`
-  - `torch.ops.fbgemm.split_embedding_codegen_lookup_rowwise_adagrad_function_pt2`
+  - `torch.ops.fbgemm.dense_embedding_codegen_lookup_function`: no-bag,
+    unweighted lookup with dense autograd;
+  - `torch.ops.fbgemm.split_embedding_codegen_lookup_rowwise_adagrad_function_pt2`:
+    no-bag, unweighted lookup with rowwise-Adagrad in-place update.
 
-  The validated surface is:
+  Both entry points are validated with:
 
-  - no-bag lookup (`PoolingMode.NONE`);
-  - unweighted lookup;
   - one- and two-table layouts with one or two batches per table and a uniform
     embedding dimension;
   - FP32 and FP16 weight storage;
   - small and general forward kernels (`D=4` and `D=36`);
   - warp and CTA backward/update paths, including 32 repeated indices for one
-    embedding row;
-  - dense autograd and split rowwise-Adagrad in-place update.
+    embedding row.
 
 The following operators are also implemented but do not constitute
 public documented FBGEMM API. These are extra variants, helpers, or utility
