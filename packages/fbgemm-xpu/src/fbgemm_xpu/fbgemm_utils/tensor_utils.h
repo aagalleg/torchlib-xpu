@@ -28,6 +28,12 @@ inline bool torch_tensor_undefined(const at::Tensor& ten) {
   return ten.defined();
 }
 
+#define TENSOR_ON_SYCL_XPU(x)                                  \
+  TORCH_CHECK(                                                 \
+      torch_tensor_on_sycl_xpu_check(x),                       \
+      #x " must be a SYCL XPU tensor; it is currently on device ", \
+      torch_tensor_device_name(x))
+
 // Generate constexpr array of variable names to improve diagnostic output and
 // raise a message if any non-empty tensor is not on a XPU or not on the same
 // XPU as all the other non-empty tensors.
