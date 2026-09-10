@@ -1093,10 +1093,17 @@ namespace fbgemm_xpu {
                     }
                 }
 
+                sycl::group_barrier(sg, sycl::memory_scope::device);
                 int counter = 0;
                 if (threadIdx_x == 0) {
-                    sycl::atomic_fence(sycl::memory_order::acq_rel, sycl::memory_scope::device);
-                    counter = xpuAtomicAdd(&grad_accum_counter_[really_long_run_id], -1);
+                    sycl::atomic_ref<
+                        int32_t,
+                        sycl::memory_order::acq_rel,
+                        sycl::memory_scope::device,
+                        sycl::access::address_space::global_space>
+                        counter_atomic(
+                            grad_accum_counter_[really_long_run_id]);
+                    counter = counter_atomic.fetch_sub(1);
                 }
                 counter = sycl::group_broadcast(sg, counter, 0);
                 // Only the thread block that accumulated last does the weight update.
@@ -1104,6 +1111,7 @@ namespace fbgemm_xpu {
                     continue;
                 }
                 assert(counter == 1 && "Invalid grad_accum_counter. Race condition?");
+                sycl::group_barrier(sg, sycl::memory_scope::device);
 
                 if constexpr (kUseVecBlocking) {
                     for (int32_t vec = 0;

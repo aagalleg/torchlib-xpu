@@ -555,6 +555,35 @@ class XpuLookupOpsTest(unittest.TestCase):
             atol=0,
         )
 
+    def test_dense_multi_cta_backward_completion(self) -> None:
+        dimension = 36
+        repeat_count = 1025
+        row = torch.arange(1, dimension + 1, dtype=torch.float32)
+        layout = self.make_layout(
+            tables=(torch.stack((torch.zeros_like(row), row)),),
+            batches=(((1,) * repeat_count,),),
+            index_dtype=torch.int64,
+            requires_grad=True,
+        )
+        output_gradient = (
+            torch.arange(repeat_count * dimension, dtype=torch.float32)
+            .remainder(5)
+            .reshape(repeat_count, dimension)
+        )
+
+        output = self.dense_lookup(layout, output_dtype=SPARSE_TYPE_FP32)
+        output.backward(output_gradient.to(self.device))
+
+        gradient = layout.dev_weights.grad
+        if gradient is None:
+            self.fail("Dense multi-CTA backward did not produce a weight gradient")
+        torch.testing.assert_close(
+            gradient.cpu(),
+            self.reference_dense_gradient(layout, output_gradient),
+            rtol=0,
+            atol=0,
+        )
+
     def test_split_general_forward_and_cta_update_with_fp16_weights(
         self,
     ) -> None:
