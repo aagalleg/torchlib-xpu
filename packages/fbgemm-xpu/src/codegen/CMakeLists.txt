@@ -5,19 +5,6 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # --------------------------------------------------------------------------
-# XPU architecture — defaults to PVC (Ponte Vecchio).
-# --------------------------------------------------------------------------
-if(NOT "$ENV{TORCH_XPU_ARCH_LIST}" STREQUAL "")
-    set(TORCH_XPU_ARCH_LIST "$ENV{TORCH_XPU_ARCH_LIST}")
-else()
-    set(TORCH_XPU_ARCH_LIST "pvc")
-endif()
-message(STATUS "[codegen] Building for XPU architectures: ${TORCH_XPU_ARCH_LIST}")
-
-set(SYCL_TARGETS -fsycl-targets=spir64_gen,spir64)
-set(SYCL_DEVICE_LIST -Xs "-device ${TORCH_XPU_ARCH_LIST} -options -cl-poison-unsupported-fp64-kernels")
-
-# --------------------------------------------------------------------------
 # Paths
 # --------------------------------------------------------------------------
 set(GENSCRIPT_DIR      ${CMAKE_CURRENT_SOURCE_DIR}/genscript)

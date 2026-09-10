@@ -17,5 +17,15 @@ if(NOT CMAKE_CXX_COMPILER MATCHES "icpx")
 endif()
 message(STATUS "Intel compiler detected: SYCL kernels enabled")
 
+if(NOT "$ENV{TORCH_XPU_ARCH_LIST}" STREQUAL "")
+    set(TORCH_XPU_ARCH_LIST "$ENV{TORCH_XPU_ARCH_LIST}")
+else()
+    set(TORCH_XPU_ARCH_LIST "pvc")
+endif()
+message(STATUS "Building for XPU architectures: ${TORCH_XPU_ARCH_LIST}")
+
+set(SYCL_TARGETS -fsycl-targets=spir64_gen,spir64)
+set(SYCL_DEVICE_LIST -Xs "-device ${TORCH_XPU_ARCH_LIST} -options -cl-poison-unsupported-fp64-kernels")
+
 add_subdirectory(src/fbgemm_xpu)
 add_subdirectory(src/codegen)

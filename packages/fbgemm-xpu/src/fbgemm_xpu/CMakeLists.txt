@@ -3,19 +3,6 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # --------------------------------------------------------------------------
-# XPU architecture: currently tested only on PVC (Ponte Vecchio).
-# --------------------------------------------------------------------------
-if(NOT "$ENV{TORCH_XPU_ARCH_LIST}" STREQUAL "")
-    set(TORCH_XPU_ARCH_LIST "$ENV{TORCH_XPU_ARCH_LIST}")
-else()
-    set(TORCH_XPU_ARCH_LIST "pvc")
-endif()
-message(STATUS "Building for XPU architectures: ${TORCH_XPU_ARCH_LIST}")
-
-set(SYCL_TARGETS -fsycl-targets=spir64_gen,spir64)
-set(SYCL_DEVICE_LIST -Xs "-device ${TORCH_XPU_ARCH_LIST} -options -cl-poison-unsupported-fp64-kernels")
-
-# --------------------------------------------------------------------------
 # Sources: keep build inputs explicit so new files are reviewed when added.
 # Add new host and SYCL kernel .cpp files to host_sources as operators are
 # integrated.
