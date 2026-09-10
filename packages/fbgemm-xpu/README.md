@@ -122,8 +122,11 @@ The lookup operators do not currently support:
 The pristine FBGEMM 1.8.0 high-level training frontend does not expose
 `ComputeDevice.XPU`. Constructing
 `SplitTableBatchedEmbeddingBagsCodegen` for XPU is therefore unavailable in
-this release. Importing the plugin and calling the supported lookup operators
-directly through `torch.ops.fbgemm` remains supported.
+this release. The upstream high-level TBE tests therefore do not exercise these
+lookup operators on XPU. Instead, CI runs
+[`test_lookup_ops.py`](tests/test_lookup_ops.py), which calls the supported
+`torch.ops.fbgemm` methods directly on XPU. The separately patched upstream
+FBGEMM tests cover the existing non-lookup operators.
 
 [FBGEMM]: https://github.com/pytorch/FBGEMM
 [uv]: https://github.com/astral-sh/uv
