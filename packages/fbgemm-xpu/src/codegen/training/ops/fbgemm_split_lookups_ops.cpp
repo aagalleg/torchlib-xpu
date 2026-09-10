@@ -497,6 +497,11 @@ Tensor split_embedding_codegen_lookup_rowwise_adagrad_function_pt2_xpu(
 
     if (static_cast<PoolingMode>(pooling_mode) == PoolingMode::NONE) {
         // no bag
+        TORCH_CHECK_EQ(
+            total_D.guard_int(__FILE__, __LINE__),
+            max_D.guard_int(__FILE__, __LINE__) * (D_offsets.numel() - 1),
+            "XPU no-bag lookup supports only uniform embedding dimensions");
+
         return SplitNoBagLookupFunction_rowwise_adagrad_Op_pt2::apply(
             placeholder_autograd_tensor, output_dtype, weights, max_D,
             hash_size_cumsum, total_hash_size_bits, indices, offsets,

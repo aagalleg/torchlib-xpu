@@ -278,6 +278,11 @@ at::Tensor split_embedding_lookup_dense_function_xpu(
     } else if (static_cast<PoolingMode>(pooling_mode) == PoolingMode::NONE) {
         // no bag
 
+        TORCH_CHECK_EQ(
+            total_D.guard_int(__FILE__, __LINE__),
+            max_D.guard_int(__FILE__, __LINE__) * (D_offsets.numel() - 1),
+            "XPU no-bag lookup supports only uniform embedding dimensions");
+
         return SplitNoBagLookupFunctionDenseOpXPU::apply(
             output_dtype, dev_weights, weights_offsets, max_D, hash_size_cumsum,
             total_hash_size_bits, indices, offsets)[0];

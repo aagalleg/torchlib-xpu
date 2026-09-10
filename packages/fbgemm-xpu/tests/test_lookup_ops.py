@@ -128,6 +128,49 @@ class XpuLookupOpsTest(unittest.TestCase):
             total_dimension=dimension * len(tables),
         )
 
+    def make_mixed_dimension_layout(self) -> LookupLayout:
+        tables = (
+            torch.arange(8, dtype=torch.float32).reshape(2, 4),
+            torch.arange(16, dtype=torch.float32).reshape(2, 8),
+        )
+        batches = (((1,),), ((0,),))
+
+        return LookupLayout(
+            tables=tables,
+            batches=batches,
+            dev_weights=torch.cat([table.flatten() for table in tables]).to(
+                self.device
+            ),
+            weights_offsets=torch.tensor(
+                [0, tables[0].numel()],
+                device=self.device,
+                dtype=torch.int64,
+            ),
+            d_offsets=torch.tensor(
+                [0, 4, 12],
+                device=self.device,
+                dtype=torch.int32,
+            ),
+            hash_size_cumsum=torch.tensor(
+                [0, 2, 4],
+                device=self.device,
+                dtype=torch.int64,
+            ),
+            total_hash_size_bits=3,
+            indices=torch.tensor(
+                [1, 0],
+                device=self.device,
+                dtype=torch.int32,
+            ),
+            offsets=torch.tensor(
+                [0, 1, 2],
+                device=self.device,
+                dtype=torch.int32,
+            ),
+            dimension=8,
+            total_dimension=12,
+        )
+
     @staticmethod
     def output_torch_dtype(output_dtype: int) -> torch.dtype:
         if output_dtype == SPARSE_TYPE_FP32:
@@ -406,6 +449,14 @@ class XpuLookupOpsTest(unittest.TestCase):
 
     def test_dense_general_forward_large_grid(self) -> None:
         self.assert_dense_large_grid_forward(dimension=36)
+
+    def test_dense_mixed_dimensions_are_rejected(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "uniform embedding dimensions"):
+            self.dense_lookup(self.make_mixed_dimension_layout())
+
+    def test_split_mixed_dimensions_are_rejected(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "uniform embedding dimensions"):
+            self.split_lookup(self.make_mixed_dimension_layout())
 
     def test_dense_lookup_backward(self) -> None:
         layout = self.make_layout(
