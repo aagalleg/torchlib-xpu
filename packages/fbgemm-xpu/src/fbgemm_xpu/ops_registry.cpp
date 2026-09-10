@@ -149,8 +149,7 @@ TORCH_LIBRARY_FRAGMENT(fbgemm, m) {
             "    SymInt max_B_feature_rank=-1, "
             "    SymInt vbe_output_size=-1, "
             "    Tensor? vbe_output=None "
-            ") -> Tensor",
-            {at::Tag::pt2_compliant_tag});
+            ") -> Tensor");
     }
 
     if (!utils::torch::schemaExists("fbgemm::split_embedding_nobag_codegen_"

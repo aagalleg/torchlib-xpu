@@ -41,6 +41,9 @@ operators, registered under the `torch.ops.fbgemm` namespace.
   - warp and CTA backward/update paths, including 32 repeated indices for one
     embedding row.
 
+  These lookup paths are currently validated in eager mode only. FakeTensor
+  tracing and `torch.compile` are not supported.
+
 The following operators are also implemented but do not constitute
 public documented FBGEMM API. These are extra variants, helpers, or utility
 operators alongside the operators above. You can find their exact signature in
