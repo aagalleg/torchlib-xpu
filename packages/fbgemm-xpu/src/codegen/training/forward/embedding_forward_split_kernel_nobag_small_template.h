@@ -141,11 +141,12 @@ namespace fbgemm_xpu {
     [[sycl::reqd_sub_group_size(fbgemm_xpu::kThreadGroupSize)]]
     inline void {{ mdesc | capitalize }}EmbeddingNobagCodegenForwardUnweightedSmallKernel<emb_t, cache_t, output_t, index_t, kThreadGroupSize>
     ::operator()(const sycl::nd_item<2>& item) const {
-        auto b_t = item.get_group(0) * item.get_local_range(0) +
+        const auto total_B = offsets_.size(0) - 1;
+        const auto b_t_start = item.get_group(0) * item.get_local_range(0) +
                 item.get_local_id(0);
-        if (static_cast<int64_t>(b_t) >= offsets_.size(0) - 1) {
-            return;
-        }
+        const auto b_t_stride =
+                item.get_group_range(0) * item.get_local_range(0);
+        for (auto b_t = b_t_start; b_t < total_B; b_t += b_t_stride) {
 
         int32_t t;
         int32_t b;
@@ -220,6 +221,7 @@ namespace fbgemm_xpu {
                     {%- endif %}
                 }
             }
+        }
         }
     }
 

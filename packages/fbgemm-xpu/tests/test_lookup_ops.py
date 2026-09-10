@@ -15,6 +15,7 @@ PLACEMENT_DEVICE = 0
 INFO_B_NUM_BITS = 26
 INFO_B_MASK = (1 << INFO_B_NUM_BITS) - 1
 LEARNING_RATE = 0.5
+LARGE_GRID_TOTAL_B = 1 << 26
 
 TableBatches = tuple[tuple[tuple[int, ...], ...], ...]
 
@@ -249,6 +250,46 @@ class XpuLookupOpsTest(unittest.TestCase):
             False,
         )
 
+    def assert_dense_large_grid_forward(self, dimension: int) -> None:
+        dev_weights = torch.arange(
+            1,
+            dimension + 1,
+            device=self.device,
+            dtype=torch.float32,
+        )
+        offsets = torch.zeros(
+            LARGE_GRID_TOTAL_B + 1,
+            device=self.device,
+            dtype=torch.int32,
+        )
+        offsets[-1] = 1
+
+        output = torch.ops.fbgemm.dense_embedding_codegen_lookup_function(
+            dev_weights,
+            torch.tensor([0], device=self.device, dtype=torch.int64),
+            torch.tensor([0, dimension], device=self.device, dtype=torch.int32),
+            dimension,
+            dimension,
+            torch.tensor([0, 1], device=self.device, dtype=torch.int64),
+            1,
+            torch.tensor([0], device=self.device, dtype=torch.int32),
+            offsets,
+            POOLING_MODE_NONE,
+            None,
+            None,
+            SPARSE_TYPE_FP32,
+            None,
+            None,
+            None,
+            -1,
+            -1,
+            -1,
+            False,
+        )
+
+        self.assertEqual(output.shape, (1, dimension))
+        torch.testing.assert_close(output.cpu(), dev_weights.cpu())
+
     def split_lookup(
         self,
         layout: LookupLayout,
@@ -359,6 +400,12 @@ class XpuLookupOpsTest(unittest.TestCase):
             output.cpu(),
             self.reference_forward(layout, SPARSE_TYPE_FP16),
         )
+
+    def test_dense_small_forward_large_grid(self) -> None:
+        self.assert_dense_large_grid_forward(dimension=4)
+
+    def test_dense_general_forward_large_grid(self) -> None:
+        self.assert_dense_large_grid_forward(dimension=36)
 
     def test_dense_lookup_backward(self) -> None:
         layout = self.make_layout(

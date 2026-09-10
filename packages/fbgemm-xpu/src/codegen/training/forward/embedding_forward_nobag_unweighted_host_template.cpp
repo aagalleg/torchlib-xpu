@@ -184,7 +184,9 @@ namespace fbgemm_xpu {
                     constexpr size_t kSmallThreadGroupSize = kEmbeddingSize / 4;
                     constexpr size_t sg_size = kThreadGroupSize;
                     constexpr size_t kBlockDimY = kForwardMaxThreads / sg_size;
-                    const size_t grid_x = {%- if dense %}(total_B + kBlockDimY - 1) / kBlockDimY{%- else %}div_round_up(static_cast<size_t>(total_B), kBlockDimY){%- endif %};
+                    const size_t grid_x_uncapped = {%- if dense %}(total_B + kBlockDimY - 1) / kBlockDimY{%- else %}div_round_up(static_cast<size_t>(total_B), kBlockDimY){%- endif %};
+                    const uint32_t grid_x = xpu_cap_grid_dim_x(
+                        grid_x_uncapped, kBlockDimY * sg_size);
 
                     queue.submit([&](sycl::handler& cgh) {
                         cgh.parallel_for<{{ mdesc | capitalize }}EmbeddingNobagCodegenForwardUnweightedSmallKernel<emb_t, cache_t, output_t, index_t, kSmallThreadGroupSize>>(
@@ -222,7 +224,9 @@ namespace fbgemm_xpu {
                         const size_t local_x = kThreadGroupSize;{%- if dense %} {%- endif %}
 
                         const size_t local_y = kForwardMaxThreads / kThreadGroupSize;
-                        const size_t grid{%- if not dense %}_x{%- endif %} = div_round_up(static_cast<size_t>(total_B), local_y);
+                        const size_t grid_x_uncapped = div_round_up(static_cast<size_t>(total_B), local_y);
+                        const uint32_t grid_x = xpu_cap_grid_dim_x(
+                            grid_x_uncapped, local_y * local_x);
                         {%- if dense %}
 
                         {%- else %}
@@ -231,7 +235,7 @@ namespace fbgemm_xpu {
                         queue.submit([&](sycl::handler& cgh) {
                             cgh.parallel_for<{{ mdesc | capitalize }}EmbeddingNobagCodegenForwardUnweightedKernel<emb_t, cache_t, output_t, {%- if not dense %}use_cache_t, {%- endif %}index_t, kThreadGroupSize>>(
                                 sycl::nd_range<2>(
-                                    sycl::range<2>(grid{%- if not dense %}_x{%- endif %} * local_y, local_x),
+                                    sycl::range<2>(grid_x * local_y, local_x),
                                     sycl::range<2>(local_y, local_x)
                                 ),
                                 {{ mdesc | capitalize }}EmbeddingNobagCodegenForwardUnweightedKernel<emb_t, cache_t, output_t, {%- if not dense %}use_cache_t, {%- endif %}index_t, kThreadGroupSize>(
