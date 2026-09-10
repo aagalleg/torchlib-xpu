@@ -331,7 +331,7 @@ class XpuLookupOpsTest(unittest.TestCase):
         )
 
         self.assertEqual(output.shape, (1, dimension))
-        torch.testing.assert_close(output.cpu(), dev_weights.cpu())
+        torch.testing.assert_close(output.cpu(), dev_weights.cpu().unsqueeze(0))
 
     def split_lookup(
         self,
@@ -452,7 +452,10 @@ class XpuLookupOpsTest(unittest.TestCase):
 
     def test_dense_mixed_dimensions_are_rejected(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "uniform embedding dimensions"):
-            self.dense_lookup(self.make_mixed_dimension_layout())
+            self.dense_lookup(
+                self.make_mixed_dimension_layout(),
+                output_dtype=SPARSE_TYPE_FP32,
+            )
 
     def test_split_mixed_dimensions_are_rejected(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "uniform embedding dimensions"):
