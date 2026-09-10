@@ -2,18 +2,6 @@ cmake_minimum_required(VERSION 3.18)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(PYBIND11_FINDPYTHON ON)
-# Prefer the active virtual environment Python when available.
-set(Python3_FIND_VIRTUALENV FIRST)
-if(DEFINED ENV{VIRTUAL_ENV})
-    set(Python3_ROOT_DIR "$ENV{VIRTUAL_ENV}")
-    set(Python3_EXECUTABLE "$ENV{VIRTUAL_ENV}/bin/python")
-endif()
-
-find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Module)
-find_package(pybind11 REQUIRED)
-find_package(Torch REQUIRED)
-
 # --------------------------------------------------------------------------
 # SYCL backend: required for fbgemm-xpu. All kernels are SYCL-based, so the
 # Intel oneAPI compiler (icpx) is mandatory.

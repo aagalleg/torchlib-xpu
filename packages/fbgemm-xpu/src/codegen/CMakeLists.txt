@@ -5,21 +5,6 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # --------------------------------------------------------------------------
-# Python / Torch / pybind11 — mirror the setup in src/fbgemm_xpu to ensure
-# the same interpreter is selected when building both sub-directories.
-# --------------------------------------------------------------------------
-set(PYBIND11_FINDPYTHON ON)
-set(Python3_FIND_VIRTUALENV FIRST)
-if(DEFINED ENV{VIRTUAL_ENV})
-    set(Python3_ROOT_DIR "$ENV{VIRTUAL_ENV}")
-    set(Python3_EXECUTABLE "$ENV{VIRTUAL_ENV}/bin/python")
-endif()
-
-find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Module)
-find_package(pybind11 REQUIRED)
-find_package(Torch REQUIRED)
-
-# --------------------------------------------------------------------------
 # SYCL backend: Intel oneAPI compiler (icpx) is mandatory.
 # --------------------------------------------------------------------------
 if(NOT CMAKE_CXX_COMPILER MATCHES "icpx")
