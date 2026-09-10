@@ -131,30 +131,19 @@ class SplitNoBagLookupFunction_rowwise_adagrad_Op_pt2
         Tensor weights_offsets;
         Tensor weights_lxu_cache;
 
-        if (weights.size() == 3) {
-            TENSOR_ON_CPU_OR_MTIA(weights[0]);
-            TENSORS_EMPTY_OR_ON_SAME_DEVICE(weights[0], weights[1]);
-            TENSORS_EMPTY_OR_ON_SAME_DEVICE(weights[0], weights[2]);
-            weights_host = weights[0];
-            weights_placements = weights[1];
-            weights_offsets = weights[2];
-        } else if (weights.size() == 5) {
-            TENSOR_ON_SYCL_XPU(weights[0]);
-            TENSORS_EMPTY_OR_ON_SAME_DEVICE(weights[0], weights[1]);
-            TENSORS_EMPTY_OR_ON_SAME_DEVICE(weights[0], weights[2]);
-            TENSORS_EMPTY_OR_ON_SAME_DEVICE(weights[0], weights[3]);
-            TENSORS_EMPTY_OR_ON_SAME_DEVICE(weights[0], weights[4]);
-            weights_dev = weights[0];
-            weights_uvm = weights[1];
-            weights_placements = weights[2];
-            weights_offsets = weights[3];
-            weights_lxu_cache = weights[4];
-        } else {
-            TORCH_CHECK(false,
-                        "Invalid size of weights, expected 3 for CPU or 5 for "
-                        "XPU but got ",
-                        weights.size());
-        }
+        TORCH_CHECK(weights.size() == 5,
+                    "Invalid size of weights, expected 5 for XPU but got ",
+                    weights.size());
+        TENSOR_ON_SYCL_XPU(weights[0]);
+        TENSORS_EMPTY_OR_ON_SAME_DEVICE(weights[0], weights[1]);
+        TENSORS_EMPTY_OR_ON_SAME_DEVICE(weights[0], weights[2]);
+        TENSORS_EMPTY_OR_ON_SAME_DEVICE(weights[0], weights[3]);
+        TENSORS_EMPTY_OR_ON_SAME_DEVICE(weights[0], weights[4]);
+        weights_dev = weights[0];
+        weights_uvm = weights[1];
+        weights_placements = weights[2];
+        weights_offsets = weights[3];
+        weights_lxu_cache = weights[4];
 
         Tensor momentum1_host;
         Tensor momentum1_dev;
@@ -162,28 +151,17 @@ class SplitNoBagLookupFunction_rowwise_adagrad_Op_pt2
         Tensor momentum1_placements;
         Tensor momentum1_offsets;
 
-        if (momentum1.size() == 3) {
-            TENSOR_ON_CPU_OR_MTIA(momentum1[0]);
-            TENSORS_EMPTY_OR_ON_SAME_DEVICE(momentum1[0], momentum1[1]);
-            TENSORS_EMPTY_OR_ON_SAME_DEVICE(momentum1[0], momentum1[2]);
-            momentum1_host = momentum1[0];
-            momentum1_placements = momentum1[1];
-            momentum1_offsets = momentum1[2];
-        } else if (momentum1.size() == 4) {
-            TENSOR_ON_SYCL_XPU(momentum1[0]);
-            TENSORS_EMPTY_OR_ON_SAME_DEVICE(momentum1[0], momentum1[1]);
-            TENSORS_EMPTY_OR_ON_SAME_DEVICE(momentum1[0], momentum1[2]);
-            TENSORS_EMPTY_OR_ON_SAME_DEVICE(momentum1[0], momentum1[3]);
-            momentum1_dev = momentum1[0];
-            momentum1_uvm = momentum1[1];
-            momentum1_placements = momentum1[2];
-            momentum1_offsets = momentum1[3];
-        } else {
-            TORCH_CHECK(false,
-                        "Invalid size of momentum1, expected 3 for CPU or 4 "
-                        "for XPU but got ",
-                        momentum1.size());
-        }
+        TORCH_CHECK(momentum1.size() == 4,
+                    "Invalid size of momentum1, expected 4 for XPU but got ",
+                    momentum1.size());
+        TENSOR_ON_SYCL_XPU(momentum1[0]);
+        TENSORS_EMPTY_OR_ON_SAME_DEVICE(momentum1[0], momentum1[1]);
+        TENSORS_EMPTY_OR_ON_SAME_DEVICE(momentum1[0], momentum1[2]);
+        TENSORS_EMPTY_OR_ON_SAME_DEVICE(momentum1[0], momentum1[3]);
+        momentum1_dev = momentum1[0];
+        momentum1_uvm = momentum1[1];
+        momentum1_placements = momentum1[2];
+        momentum1_offsets = momentum1[3];
 
         const auto T = weights_offsets.sym_numel();
         const auto max_B_ = offsets.sym_size(0) / T;

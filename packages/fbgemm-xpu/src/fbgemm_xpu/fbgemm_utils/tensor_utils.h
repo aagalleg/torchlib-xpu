@@ -42,10 +42,6 @@ inline bool torch_tensor_undefined(const std::optional<at::Tensor>& ten) {
   return !ten.has_value() || torch_tensor_undefined(ten.value());
 }
 
-inline bool torch_tensor_on_cpu_or_on_mtia_check(const at::Tensor& ten) {
-  return ten.is_cpu() || ten.is_mtia();
-}
-
 inline bool torch_tensor_on_same_device_check(
     const at::Tensor& ten1,
     const std::optional<at::Tensor>& ten2) {
@@ -65,12 +61,6 @@ inline bool torch_tensor_on_sycl_xpu_check(
     const std::optional<at::Tensor>& ten) {
   return !ten.has_value() || torch_tensor_on_sycl_xpu_check(ten.value());
 }
-
-#define TENSOR_ON_CPU_OR_MTIA(x)                                      \
-  TORCH_CHECK(                                                        \
-      torch_tensor_on_cpu_or_on_mtia_check(x),                        \
-      #x " must be a CPU or MTIA tensor; it is currently on device ", \
-      torch_tensor_device_name(x))
 
 #define TENSORS_EMPTY_OR_ON_SAME_DEVICE(x, y)                           \
   TORCH_CHECK(                                                          \
