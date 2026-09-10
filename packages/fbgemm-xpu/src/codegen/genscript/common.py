@@ -1,4 +1,5 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
+# Copyright (c) 2026 Intel Corporation. All Rights Reserved.
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
