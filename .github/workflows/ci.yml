@@ -466,7 +466,7 @@ jobs:
     - name: 'Test gpu'
       run: |
         python -c "import torch; assert torch.xpu.is_available(), 'XPU (Intel GPU) is not available'"
-    - name: 'Test fbgemm-xpu with pristine FBGEMM'
+    - name: 'Test fbgemm-xpu'
       run: |
         pytest -rsf torchlib-xpu/packages/fbgemm-xpu/tests/
     - name: 'Patch upstream FBGEMM tests'
