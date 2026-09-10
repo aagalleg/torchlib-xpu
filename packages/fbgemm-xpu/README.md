@@ -25,13 +25,12 @@ operators, registered under the `torch.ops.fbgemm` namespace.
   - [`permute_1D_sparse_data`][op-permute_1D_sparse_data]
   - [`permute_2D_sparse_data`][op-permute_2D_sparse_data]
 
-* Training lookup operators:
+* Training lookup operators supported through direct calls:
 
-  - `dense_embedding_codegen_lookup_function`
-  - `split_embedding_codegen_lookup_rowwise_adagrad_function_pt2`
+  - `torch.ops.fbgemm.dense_embedding_codegen_lookup_function`
+  - `torch.ops.fbgemm.split_embedding_codegen_lookup_rowwise_adagrad_function_pt2`
 
-  The lookup operators are currently supported through direct
-  `torch.ops.fbgemm` calls. The validated surface is:
+  The validated surface is:
 
   - no-bag lookup (`PoolingMode.NONE`);
   - unweighted lookup;
