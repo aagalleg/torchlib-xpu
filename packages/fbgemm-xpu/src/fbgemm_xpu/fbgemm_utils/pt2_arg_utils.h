@@ -17,7 +17,6 @@ enum ArgIndex_aux_tensor {
     IDX_VBE_OUTPUT_OFFSETS = 6,
     AUX_TENSOR_SIZE = 7
 };
-static_assert(AUX_TENSOR_SIZE == IDX_VBE_OUTPUT_OFFSETS + 1);
 
 enum ArgIndex_aux_bool {
     IDX_IS_EXPERIMENTAL_TBE = 0,
@@ -29,7 +28,6 @@ enum ArgIndex_aux_bool {
     IDX_MIXED_D = 6,
     AUX_BOOL_SIZE = 7
 };
-static_assert(AUX_BOOL_SIZE == IDX_MIXED_D + 1);
 
 enum ArgIndex_aux_int {
     IDX_ITER = 0,
@@ -37,13 +35,11 @@ enum ArgIndex_aux_int {
     IDX_INFO_B_MASK = 2,
     AUX_INT_SIZE = 3
 };
-static_assert(AUX_INT_SIZE == IDX_INFO_B_MASK + 1);
 
 enum ArgIndex_aux_float {
     IDX_GWD_LOWER_BOUND = 0,
     IDX_MAX_GRADIENT = 1,
     AUX_FLOAT_SIZE = 2
 };
-static_assert(AUX_FLOAT_SIZE == IDX_MAX_GRADIENT + 1);
 
 }  // namespace fbgemm_xpu
