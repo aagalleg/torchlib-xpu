@@ -10,9 +10,7 @@
 
 namespace fbgemm_xpu::config {
 
-#define ENUMERATE_ALL_FEATURE_FLAGS \
-  X(TBE_V2)                         \
-  X(TBE_ANNOTATE_KINETO_TRACE)
+#define ENUMERATE_ALL_FEATURE_FLAGS X(TBE_ANNOTATE_KINETO_TRACE)
 // X(EXAMPLE_FEATURE_FLAG)
 
 enum class FeatureGateName {

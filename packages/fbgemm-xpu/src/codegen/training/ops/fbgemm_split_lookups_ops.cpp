@@ -502,15 +502,6 @@ Tensor split_embedding_codegen_lookup_rowwise_adagrad_function_pt2_xpu(
     const c10::SymInt max_B_feature_rank = -1,
     const c10::SymInt vbe_output_size = -1,
     std::optional<Tensor> vbe_output = std::nullopt) {
-    // Load the config value from JK once
-    static auto is_tbev2_enabled =
-        config::is_feature_enabled(config::FeatureGateName::TBE_V2);
-
-    // Set to experimental if either the feature is enabled in JK, or the user
-    // specifies to use TBEv2
-    aux_bool[IDX_IS_EXPERIMENTAL_TBE] =
-        is_tbev2_enabled || aux_bool[IDX_IS_EXPERIMENTAL_TBE];
-
     // has vbe support and on xpu
     if (aux_tensor[IDX_B_OFFSETS].has_value()) {
         if (aux_bool[IDX_APPLY_GLOBAL_WEIGHT_DECAY] && optim_float[1] > 0) {
