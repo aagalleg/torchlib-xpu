@@ -179,7 +179,6 @@ set(training_sources
 Python3_add_library(_C_training MODULE WITH_SOABI ${training_sources})
 set_target_properties(_C_training PROPERTIES
     PREFIX      ""
-    CXX_STANDARD 17
 )
 
 # Ensure generated files are produced before compilation starts.
