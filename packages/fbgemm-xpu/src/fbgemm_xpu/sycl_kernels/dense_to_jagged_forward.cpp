@@ -98,7 +98,8 @@ at::Tensor dense_to_jagged_forward_xpu(
     // `values` is the jagged operand. JaggedOpCopyY never reads it, so it is
     // deliberately left uninitialized, as in the CUDA source.
     auto values = at::empty_symint({total_L_computed, D}, dense.options());
-    auto output = at::empty_like(values);
+    auto output = dense.numel() == 0 ? at::zeros_like(values)
+                                     : at::empty_like(values);
 
     SYCL_DEVICE_GUARD(dense);
 

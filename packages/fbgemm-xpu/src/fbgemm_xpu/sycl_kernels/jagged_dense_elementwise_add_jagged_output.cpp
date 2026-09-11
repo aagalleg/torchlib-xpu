@@ -36,7 +36,8 @@ public:
         ctx->save_for_backward(offsets);
         ctx->saved_data["dense_shape"] = dense.sizes();
 
-        auto output = at::empty_like(x_values);
+        auto output = dense.numel() == 0 ? x_values.clone()
+                                         : at::empty_like(x_values);
 
         SYCL_DEVICE_GUARD(dense);
 
