@@ -240,8 +240,17 @@ public:
         const IdxT inner_begin = static_cast<IdxT>(item.get_local_id(1));
         const IdxT inner_stride = static_cast<IdxT>(item.get_local_range(1));
 
-        for (IdxT outer = outer_begin; outer < total_outer;
-             outer += outer_stride) {
+        // The inner loops below step over element pairs. Testing
+        // `iidx * 2 + 1 < inner_dense_size` evaluates that product for the
+        // first iidx that fails the test, which passes INT32_MAX once
+        // inner_dense_size approaches the int32 limit. Comparing against the
+        // pair count is equivalent for both parities - for inner_dense_size
+        // 2h and 2h + 1 alike the original test holds exactly while iidx < h -
+        // and keeps every term in range.
+        const IdxT inner_pairs = inner_dense_size / 2;
+        const bool has_odd_tail = (inner_dense_size & 1) != 0;
+
+        for (IdxT outer = outer_begin; outer < total_outer;) {
             const IdxT oidx = outer / jagged_folded_size;
             const IdxT jidx = outer % jagged_folded_size;
 
@@ -251,20 +260,20 @@ public:
 
             if (is_zero) {
                 IdxT iidx;
-                for (iidx = inner_begin; iidx * 2 + 1 < inner_dense_size;
+                for (iidx = inner_begin; iidx < inner_pairs;
                      iidx += inner_stride) {
                     output_[oidx][jidx][2 * iidx] =
                         f_(padding_value_, y_[oidx][jidx][2 * iidx]);
                     output_[oidx][jidx][2 * iidx + 1] =
                         f_(padding_value_, y_[oidx][jidx][2 * iidx + 1]);
                 }
-                if (iidx * 2 + 1 == inner_dense_size) {
+                if (has_odd_tail && iidx == inner_pairs) {
                     output_[oidx][jidx][2 * iidx] =
                         f_(padding_value_, y_[oidx][jidx][2 * iidx]);
                 }
             } else {
                 IdxT iidx;
-                for (iidx = inner_begin; iidx * 2 + 1 < inner_dense_size;
+                for (iidx = inner_begin; iidx < inner_pairs;
                      iidx += inner_stride) {
                     output_[oidx][jidx][2 * iidx] = f_(
                         x_values_[offset][2 * iidx], y_[oidx][jidx][2 * iidx]);
@@ -272,11 +281,21 @@ public:
                         x_values_[offset][2 * iidx + 1],
                         y_[oidx][jidx][2 * iidx + 1]);
                 }
-                if (iidx * 2 + 1 == inner_dense_size) {
+                if (has_odd_tail && iidx == inner_pairs) {
                     output_[oidx][jidx][2 * iidx] = f_(
                         x_values_[offset][2 * iidx], y_[oidx][jidx][2 * iidx]);
                 }
             }
+
+            // `total_outer - outer` is in [1, total_outer] so it cannot
+            // overflow, unlike `outer + outer_stride`, which passes INT32_MAX
+            // on the last active work-item when total_outer approaches the
+            // int32 limit: the numel < INT32_MAX gate bounds the indices this
+            // kernel forms, not the one-past-the-end value of this counter.
+            if (total_outer - outer <= outer_stride) {
+                break;
+            }
+            outer += outer_stride;
         }
     }
 
@@ -343,7 +362,12 @@ public:
         const int inner_begin = static_cast<int>(item.get_local_id(1));
         const int inner_stride = static_cast<int>(item.get_local_range(1));
 
-        for (int offset = offset_begin; offset < nnz; offset += offset_stride) {
+        // Pair count instead of `iidx * 2 + 1 < inner_dense_size`; see the
+        // matching comment in JaggedDenseElementwiseDenseOutputKernel.
+        const int inner_pairs = inner_dense_size / 2;
+        const bool has_odd_tail = (inner_dense_size & 1) != 0;
+
+        for (int offset = offset_begin; offset < nnz;) {
             int offset_temp = offset;
             int jidx = 0;
             bool truncated = false;
@@ -385,7 +409,7 @@ public:
             if (!truncated) {
                 const int oidx = offset_temp;
                 int iidx;
-                for (iidx = inner_begin; iidx * 2 + 1 < inner_dense_size;
+                for (iidx = inner_begin; iidx < inner_pairs;
                      iidx += inner_stride) {
                     output_values_[offset][2 * iidx] = f_(
                         x_values_[offset][2 * iidx],
@@ -396,7 +420,7 @@ public:
                         y_0_[oidx][jidx][2 * iidx + 1],
                         y_1_[oidx][jidx][2 * iidx + 1]);
                 }
-                if (iidx * 2 + 1 == inner_dense_size) {
+                if (has_odd_tail && iidx == inner_pairs) {
                     output_values_[offset][2 * iidx] = f_(
                         x_values_[offset][2 * iidx],
                         y_0_[oidx][jidx][2 * iidx],
@@ -404,7 +428,7 @@ public:
                 }
             } else {
                 int iidx;
-                for (iidx = inner_begin; iidx * 2 + 1 < inner_dense_size;
+                for (iidx = inner_begin; iidx < inner_pairs;
                      iidx += inner_stride) {
                     output_values_[offset][2 * iidx] = f_(
                         x_values_[offset][2 * iidx], scalar_t(0), scalar_t(0));
@@ -413,11 +437,19 @@ public:
                         scalar_t(0),
                         scalar_t(0));
                 }
-                if (iidx * 2 + 1 == inner_dense_size) {
+                if (has_odd_tail && iidx == inner_pairs) {
                     output_values_[offset][2 * iidx] = f_(
                         x_values_[offset][2 * iidx], scalar_t(0), scalar_t(0));
                 }
             }
+
+            // Guarded increment; see the matching comment in
+            // JaggedDenseElementwiseDenseOutputKernel. `nnz` is bounded by
+            // x_values.numel(), but `offset + offset_stride` is not.
+            if (nnz - offset <= offset_stride) {
+                break;
+            }
+            offset += offset_stride;
         }
     }
 
@@ -975,8 +1007,7 @@ public:
         const int tid_begin = static_cast<int>(item.get_local_id(1));
         const int tid_stride = static_cast<int>(item.get_local_range(1));
 
-        for (int real_row = values_row; real_row < nnz_;
-             real_row += row_stride) {
+        for (int real_row = values_row; real_row < nnz_;) {
             const int dense_row = rows_[real_row];
             const int dense_col = cols_[real_row];
 
@@ -1086,6 +1117,13 @@ public:
                     values_ptr[tid] = v_out;
                 }
             }
+
+            // Guarded increment; see the matching comment in
+            // JaggedDenseElementwiseDenseOutputKernel.
+            if (nnz_ - real_row <= row_stride) {
+                break;
+            }
+            real_row += row_stride;
         }
     }
 
