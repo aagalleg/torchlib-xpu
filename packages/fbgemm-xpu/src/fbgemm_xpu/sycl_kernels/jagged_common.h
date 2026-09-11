@@ -528,6 +528,9 @@ inline JaggedLaunchConfig check_shape_and_partition_(
     // with max length 64. Capping is safe because both consumers of this config
     // (the dense-output and jagged-output kernels) iterate their outer index
     // with a group-stride loop, so a smaller launch still covers every row.
+    // The jagged-output consumer re-derives blocks from nnz rather than from
+    // outer * folded, so it must re-apply the same cap itself - see
+    // FBGEMM_XPU_JAGGED_OUTPUT_INVOKE_BODY.
     const int64_t blocks = std::max<int64_t>(
         1,
         static_cast<int64_t>(xpu_cap_grid_dim_x(
@@ -754,8 +757,15 @@ at::Tensor jagged_dense_elementwise_dense_output_(
     {                                                                          \
         JaggedLaunchConfig cfg =                                               \
             check_shape_and_partition_(x_values, x_offsets, y);                \
+        /* This kernel strides over nnz, not outer * folded, so the grid is     \
+         * re-derived here. Re-apply the int32 launch-size cap that             \
+         * check_shape_and_partition_ applied to the value being replaced;      \
+         * the group-stride loop over `offset` still covers every row. */       \
         cfg.blocks = std::max<int64_t>(                                        \
-            1, div_round_up(x_values.size(0), cfg.threads_y));                 \
+            1,                                                                 \
+            static_cast<int64_t>(xpu_cap_grid_dim_x(                           \
+                div_round_up(x_values.size(0), cfg.threads_y),                 \
+                cfg.threads_x * cfg.threads_y)));                              \
                                                                                \
         StackArray<const index_t*> x_offset_ptrs;                             \
         StackArray<int64_t> x_offset_sizes;                                    \
