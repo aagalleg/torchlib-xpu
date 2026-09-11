@@ -889,7 +889,18 @@ public:
             return;
         }
 
-        int count = B_ - 1;
+        // offsets holds B + 1 entries, so searching the full B-wide range
+        // [1, B] is what lets this return dense_row == B for a values row that
+        // lies past the last offset - the "values has more elements than the
+        // last element of offsets" case the generic kernel handles by
+        // truncating. CUDA seeds this with B - 1 (common.cuh), stopping at
+        // offsets[B - 1] and never examining the final offsets[B] sentinel;
+        // such a row then resolves to B - 1, passes the gather kernel's bounds
+        // check and wrongly gathers the last dense row instead of zeros.
+        // The generic kernel searches offsets.numel() - 1 == B in both sources,
+        // so upstream's own two paths disagree on such an input. Deliberate
+        // deviation from the CUDA source, which has the same defect.
+        int count = B_;
         int first = 1;
         while (count > 0) {
             int idx = first;
@@ -1025,14 +1036,19 @@ public:
                 reinterpret_cast<sycl::half*>(&values_[real_row][0]);
             const sycl::half* x_ptr =
                 reinterpret_cast<const sycl::half*>(&x_values_[real_row][0]);
-            const sycl::half* y0_ptr = reinterpret_cast<const sycl::half*>(
-                &y0_[dense_row][dense_col][0]);
-            const sycl::half* y1_ptr = reinterpret_cast<const sycl::half*>(
-                &y1_[dense_row][dense_col][0]);
 
             if ((dense_col < y0_.size(1)) && (dense_row < y0_.size(0)) &&
                 (dense_col < y1_.size(1)) && (dense_row < y1_.size(0)) &&
                 (dense_col >= 0) && (dense_row >= 0)) {
+                // Formed only once the bounds check has passed. CUDA builds
+                // these ahead of the check, which is out-of-range pointer
+                // arithmetic for any row the check then rejects - reachable
+                // now that the search above can return dense_row == B.
+                const sycl::half* y0_ptr = reinterpret_cast<const sycl::half*>(
+                    &y0_[dense_row][dense_col][0]);
+                const sycl::half* y1_ptr = reinterpret_cast<const sycl::half*>(
+                    &y1_[dense_row][dense_col][0]);
+
                 for (int tid = tid_begin; tid < E_ / 8; tid += tid_stride) {
                     HalfVec8 v_out = {};
                     const HalfVec8 v_x =
