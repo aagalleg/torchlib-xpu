@@ -466,6 +466,18 @@ private:
     F f_;
 };
 
+inline void check_tensors_on_same_xpu_(
+    const at::Tensor& x_values,
+    const std::vector<at::Tensor>& x_offsets,
+    const at::Tensor& y,
+    const at::Tensor& output) {
+    TENSOR_ON_SYCL_XPU(x_values);
+    TENSORS_ON_SAME_SYCL_XPU_IF_NOT_OPTIONAL(x_values, y, output);
+    for (const auto& x_offset : x_offsets) {
+        TENSORS_ON_SAME_SYCL_XPU_IF_NOT_OPTIONAL(x_values, x_offset);
+    }
+}
+
 // ============================================================================
 // check_shape_and_partition_ - launch geometry + jagged dim extraction
 // ============================================================================
@@ -622,10 +634,7 @@ void jagged_dense_elementwise_dense_output_(
     const at::Tensor& output,
     F f,
     const scalar_t padding_value = static_cast<scalar_t>(0)) {
-    TENSOR_ON_SYCL_XPU(x_values);
-    for (const auto& x_offset : x_offsets) {
-        TENSOR_ON_SYCL_XPU(x_offset);
-    }
+    check_tensors_on_same_xpu_(x_values, x_offsets, y, output);
 
     const int num_jagged_dim = y.dim() - 2;
     TORCH_CHECK(
@@ -812,10 +821,7 @@ void jagged_dense_elementwise_jagged_output_(
     const at::Tensor& y,
     const at::Tensor& output_values,
     F f) {
-    TENSOR_ON_SYCL_XPU(x_values);
-    for (const auto& x_offset : x_offsets) {
-        TENSOR_ON_SYCL_XPU(x_offset);
-    }
+    check_tensors_on_same_xpu_(x_values, x_offsets, y, output_values);
 
     const int num_jagged_dim = y.dim() - 2;
     TORCH_CHECK(
@@ -1245,10 +1251,7 @@ void jagged_dense_elementwise_jagged_output_opt_(
     const at::Tensor& y,
     const at::Tensor& output_values,
     F f) {
-    TENSOR_ON_SYCL_XPU(x_values);
-    for (const auto& x_offset : x_offsets) {
-        TENSOR_ON_SYCL_XPU(x_offset);
-    }
+    check_tensors_on_same_xpu_(x_values, x_offsets, y, output_values);
 
     const int num_jagged_dim = y.dim() - 2;
     TORCH_CHECK(
