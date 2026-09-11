@@ -500,7 +500,7 @@ struct JaggedLaunchConfig {
     }
 };
 
-inline JaggedLaunchConfig check_shape_and_partition_(
+inline void check_jagged_dense_shape_(
     const at::Tensor& values,
     const std::vector<at::Tensor>& offsets,
     const at::Tensor& dense_tensor) {
@@ -518,6 +518,16 @@ inline JaggedLaunchConfig check_shape_and_partition_(
         inner_dense_size,
         " != values.size(-1), ",
         values.size(-1));
+}
+
+inline JaggedLaunchConfig check_shape_and_partition_(
+    const at::Tensor& values,
+    const std::vector<at::Tensor>& offsets,
+    const at::Tensor& dense_tensor) {
+    check_jagged_dense_shape_(values, offsets, dense_tensor);
+
+    const int64_t outer_dense_size = dense_tensor.size(0);
+    const int64_t inner_dense_size = dense_tensor.size(-1);
     const int64_t jagged_folded_size =
         dense_tensor.numel() / (outer_dense_size * inner_dense_size);
 
@@ -1264,6 +1274,8 @@ void jagged_dense_elementwise_jagged_output_opt_(
     if (y.numel() == 0 || x_values.numel() == 0) {
         return;
     }
+
+    check_jagged_dense_shape_(x_values, x_offsets, y);
 
     // Canonicalize y to 3D, collapsing jagged dimensions.
     const at::Tensor y_reshaped = y.view({y.size(0), -1, y.size(-1)});
