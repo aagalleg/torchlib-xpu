@@ -1213,6 +1213,9 @@ inline bool jagged_dense_dense_elementwise_jagged_output_matches_opt(
     matches &= (y_0_reshaped.stride(-2) % 8 == 0);
     matches &= (y_1_reshaped.stride(-2) % 8 == 0);
 
+    matches &= (y_0_reshaped.stride(0) % 8 == 0);
+    matches &= (y_1_reshaped.stride(0) % 8 == 0);
+
     // Base addresses aligned to 128-bit
     matches &= (reinterpret_cast<uint64_t>(x_values.data_ptr()) % 16 == 0);
     matches &= (reinterpret_cast<uint64_t>(output_values.data_ptr()) % 16 == 0);
