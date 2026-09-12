@@ -533,11 +533,29 @@ inline JaggedLaunchConfig check_shape_and_partition_(
 
     constexpr int64_t kWarpSize = static_cast<int64_t>(kThreadGroupSize);
 
-    // CUDA: inner_dense_size >= kWarpSize / 2 ? kWarpSize : inner_dense_size.
-    // Clamped to at least 1 so a zero-width inner dim cannot produce an empty
-    // nd_range (CUDA tolerates a zero-sized block dim by never launching).
+    // DIVERGENCE FROM CUDA, which uses
+    //   inner_dense_size >= kWarpSize / 2 ? kWarpSize : inner_dense_size.
+    // That threshold accounts for the two-elements-per-work-item inner loops in
+    // both consuming kernels, but the value does not: they stride over
+    // inner_dense_size / 2 pairs, so the inner axis needs only
+    // ceil(inner_dense_size / 2) lanes. CUDA's value over-provisions for every
+    // inner_dense_size < 2 * kWarpSize, worst at exactly kWarpSize / 2, where the
+    // ternary jumps from 15 lanes to 32 while the pair count only goes 7 -> 8:
+    // 24 of 32 inner lanes fail their first loop test. Those idle work-items hold
+    // Xe-core thread slots for the whole work-group's lifetime, where CUDA retires
+    // empty warps at issue - on B60, BF16 inner_dense_size 16 measured 3.6-3.8x
+    // slower than the pair-derived extent below.
+    //
+    // Only the clamp to 1 is load-bearing for correctness: a zero-width inner dim
+    // would otherwise produce an empty nd_range (CUDA tolerates a zero-sized
+    // block dim by never launching). Every other extent is just a loop stride -
+    // the lane at inner_pairs % threads_x always exits exactly on the pair count,
+    // so the odd tail element at 2 * (inner_dense_size / 2) is written for any
+    // extent >= 1. Rounding the pair count up rather than down is therefore a
+    // throughput choice: it gives odd widths one more lane and saves that lane a
+    // second trip round the loop.
     const int64_t threads_x = std::max<int64_t>(
-        1, inner_dense_size >= kWarpSize / 2 ? kWarpSize : inner_dense_size);
+        1, std::min<int64_t>(kWarpSize, div_round_up(inner_dense_size, 2)));
     const int64_t threads_y = static_cast<int64_t>(kMaxThreads) / kWarpSize;
 
     // The work-group count is capped so the flattened work-item
@@ -546,13 +564,18 @@ inline JaggedLaunchConfig check_shape_and_partition_(
     // cannot exceed in practice. DPC++ is stricter: it assumes by default
     // (-fsycl-id-queries-fit-in-int) that the TOTAL work-item count fits in an
     // int, and queue::submit throws once blocks * threads_y * threads_x passes
-    // INT32_MAX - reachable here at outer * folded > ~67M, e.g. a 1M-row batch
-    // with max length 64. Capping is safe because both consumers of this config
-    // (the dense-output and jagged-output kernels) iterate their outer index
-    // with a group-stride loop, so a smaller launch still covers every row.
-    // The jagged-output consumer re-derives blocks from nnz rather than from
-    // outer * folded, so it must re-apply the same cap itself - see
-    // FBGEMM_XPU_JAGGED_OUTPUT_INVOKE_BODY.
+    // INT32_MAX. Because threads_x <= inner_dense_size above, that product is at
+    // most the dense operand's numel, so reaching the limit needs an over-limit
+    // numel too - only the dense-output consumer accepts one, via its
+    // packed_accessor64 fallback. Smallest such launch: inner_dense_size >= 63,
+    // so threads_x saturates at kWarpSize, with outer * folded >= ~67M.
+    // Capping is safe because both consumers of this config (the dense-output and
+    // jagged-output kernels) iterate their outer index with a group-stride loop,
+    // so a smaller launch still covers every row. The jagged-output consumer
+    // re-derives blocks from nnz rather than from outer * folded, so it must
+    // re-apply the same cap itself - see FBGEMM_XPU_JAGGED_OUTPUT_INVOKE_BODY,
+    // whose cap is now defensive only: it builds packed_accessor32
+    // unconditionally, so ATen rejects an over-limit numel before the launch.
     const int64_t blocks = std::max<int64_t>(
         1,
         static_cast<int64_t>(xpu_cap_grid_dim_x(
