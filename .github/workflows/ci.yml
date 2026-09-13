@@ -488,6 +488,17 @@ jobs:
         pytest -rsf fbgemm_gpu/test/sparse/reorder_batched_test.py
         pytest -rsf fbgemm_gpu/test/tbe/utils/generate_vbe_metadata_test.py
         pytest -rsf fbgemm_gpu/test/tbe/utils/split_embeddings_utils_test.py
+    - name: 'Test fbgemm-xpu jagged regressions'
+      working-directory: torchlib-xpu
+      run: |
+        pytest -rsf packages/fbgemm-xpu/tests/test_jagged_device_validation.py
+        pytest -rsf packages/fbgemm-xpu/tests/test_jagged_fp16_dense_batch_alignment.py
+        pytest -rsf packages/fbgemm-xpu/tests/test_jagged_fp16_sentinel_search.py
+        pytest -rsf packages/fbgemm-xpu/tests/test_jagged_fp16_shape_validation.py
+        pytest -rsf packages/fbgemm-xpu/tests/test_jagged_inner_dim_sweep.py
+        pytest -rsf packages/fbgemm-xpu/tests/test_jagged_large_grid.py
+        pytest -rsf packages/fbgemm-xpu/tests/test_jagged_zero_max_length.py
+        pytest -rsf packages/fbgemm-xpu/tests/test_jagged_loop_bounds_overflow.py
 
   publish:
     needs: [ compose, test-torchcodec, test-fbgemm ]
