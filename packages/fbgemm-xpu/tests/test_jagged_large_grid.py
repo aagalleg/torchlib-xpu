@@ -92,6 +92,35 @@ def _require_memory(num_elements: int) -> None:
         )
 
 
+# A whole-tensor reduction over the [nnz, D] tails below allocates a temporary
+# the size of its input: `count_nonzero` takes 9 bytes per element (a bool mask
+# plus an int64 accumulator) and `torch.equal` 1 byte. At this nnz that is up to
+# 18 GiB - larger than the operands under test, and more than a 16 GiB device
+# holds, so the assertion would OOM on a shape the operator itself handles in
+# ~4 GiB. Reducing one slice at a time bounds the temporary to _CHUNK_ROWS,
+# which keeps each test's peak at its operands plus ~64 MiB.
+_CHUNK_ROWS = 1 << 26
+
+
+def _assert_all_zero(actual: torch.Tensor) -> None:
+    """Assert every element is zero, without a full-size temporary."""
+    for start in range(0, actual.size(0), _CHUNK_ROWS):
+        chunk = actual[start : start + _CHUNK_ROWS]
+        assert not chunk.any(), (  # nosec B101
+            f"non-zero element in rows [{start}, {start + chunk.size(0)})"
+        )
+
+
+def _assert_rows_equal(actual: torch.Tensor, expected: torch.Tensor) -> None:
+    """Assert two row-aligned tensors match, without a full-size temporary."""
+    assert actual.shape == expected.shape  # nosec B101
+    for start in range(0, actual.size(0), _CHUNK_ROWS):
+        stop = min(start + _CHUNK_ROWS, actual.size(0))
+        assert torch.equal(actual[start:stop], expected[start:stop]), (  # nosec B101
+            f"mismatch in rows [{start}, {stop})"
+        )
+
+
 # ============================================================================
 # Dense-output path - cap reachable via the packed_accessor64 fallback
 # ============================================================================
@@ -201,7 +230,7 @@ def test_jagged_to_padded_dense_backward_large_grid():
     # Rows inside the jagged region receive the dense gradient; the rest are the
     # zeros the operator pre-allocated for the portion truncated in forward.
     assert torch.equal(grad_values[: _LENGTHS[0]], dense[0])  # nosec B101
-    assert torch.count_nonzero(grad_values[_LENGTHS[0] :]) == 0  # nosec B101
+    _assert_all_zero(grad_values[_LENGTHS[0] :])
 
 
 def test_jagged_dense_elementwise_add_jagged_output_large_grid():
@@ -223,7 +252,7 @@ def test_jagged_dense_elementwise_add_jagged_output_large_grid():
     # nnz the cap drops a single row - the capped launch covers
     # _MAX_BLOCKS * _THREADS_Y == _NNZ - 1 of them - so the final row is
     # reached only by a second trip round the group-stride loop.
-    assert torch.equal(output[_LENGTHS[0] :], x_values[_LENGTHS[0] :])  # nosec B101
+    _assert_rows_equal(output[_LENGTHS[0] :], x_values[_LENGTHS[0] :])
 
 
 def test_dense_to_jagged_forward_large_grid():
@@ -237,4 +266,4 @@ def test_dense_to_jagged_forward_large_grid():
     assert torch.equal(output[: _LENGTHS[0]], dense[0])  # nosec B101
     # Rows past the jagged region gather zero. The output buffer starts
     # uninitialized, so this also checks the capped launch reached those rows.
-    assert torch.count_nonzero(output[_LENGTHS[0] :]) == 0  # nosec B101
+    _assert_all_zero(output[_LENGTHS[0] :])
