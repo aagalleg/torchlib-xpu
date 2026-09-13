@@ -33,10 +33,9 @@ each is asserted to do so at import time.
    memory would go unnoticed.
 """
 
+import fbgemm_xpu  # noqa: F401  - registers the fbgemm XPU operators
 import pytest
 import torch
-
-import fbgemm_xpu  # noqa: F401  - registers the fbgemm XPU operators
 
 pytestmark = pytest.mark.skipif(
     not torch.xpu.is_available(), reason="requires an XPU device"
@@ -66,21 +65,21 @@ def _div_round_up(a: int, b: int) -> int:
 # work-item makes exactly one pass and the last active counter is limit - 1.
 _LARGE_OUTER = 2**30 + 1
 _OUTER_STRIDE = _div_round_up(_LARGE_OUTER, _THREADS_Y) * _THREADS_Y
-assert _OUTER_STRIDE > _LARGE_OUTER, "stride must exceed the row count"
+assert _OUTER_STRIDE > _LARGE_OUTER, "stride must exceed the row count"  # nosec B101
 # 1,073,741,824 + 1,073,741,856 = 2,147,483,680
-assert (_LARGE_OUTER - 1) + _OUTER_STRIDE > _INT32_MAX, "step must overflow int32"
+assert (_LARGE_OUTER - 1) + _OUTER_STRIDE > _INT32_MAX, "step must overflow int32"  # nosec B101
 
 # --- large-inner: iidx * 2 + 1 overflows -------------------------------------
 #
 # Kept just under INT32_MAX so the numel gate still selects the int32 kernel -
 # that is the whole point, the gate holds and the arithmetic still overflows.
 _LARGE_INNER = 2**31 - 2
-assert _LARGE_INNER < _INT32_MAX, "must stay on the int32 indexing path"
+assert _LARGE_INNER < _INT32_MAX, "must stay on the int32 indexing path"  # nosec B101
 _INNER_PAIRS = _LARGE_INNER // 2
 # First iidx that fails `iidx < inner_pairs`, reached from inner_begin = 0.
 _FIRST_FAILING_IIDX = _div_round_up(_INNER_PAIRS, _THREADS_X_WIDE) * _THREADS_X_WIDE
 # 2 * 2**30 + 1 = 2,147,483,649
-assert 2 * _FIRST_FAILING_IIDX + 1 > _INT32_MAX, "product must overflow int32"
+assert 2 * _FIRST_FAILING_IIDX + 1 > _INT32_MAX, "product must overflow int32"  # nosec B101
 
 # Padding is non-zero so the assertions on untouched regions also show that the
 # kernel reached them, rather than passing on a zeroed buffer.
@@ -122,9 +121,9 @@ def test_dense_output_large_outer():
         values, [offsets], [_LARGE_OUTER], _PADDING
     )
 
-    assert padded.shape == (1, _LARGE_OUTER)
-    assert torch.equal(padded[0, :jagged_len], values)
-    assert _uniform(padded[0, jagged_len:], _PADDING)
+    assert padded.shape == (1, _LARGE_OUTER)  # nosec B101
+    assert torch.equal(padded[0, :jagged_len], values)  # nosec B101
+    assert _uniform(padded[0, jagged_len:], _PADDING)  # nosec B101
 
 
 def test_jagged_output_large_outer():
@@ -138,11 +137,11 @@ def test_jagged_output_large_outer():
         dense, [offsets], _LARGE_OUTER
     )
 
-    assert output.shape == (_LARGE_OUTER, 1)
+    assert output.shape == (_LARGE_OUTER, 1)  # nosec B101
     # Row 0 gathers the dense value; every later row is past the jagged region
     # and gathers zero. Both halves are written, so this covers all nnz rows.
-    assert output[0, 0].item() == 7.0
-    assert _uniform(output[1:], 0.0)
+    assert output[0, 0].item() == 7.0  # nosec B101
+    assert _uniform(output[1:], 0.0)  # nosec B101
 
 
 def test_dense_output_large_inner():
@@ -156,11 +155,11 @@ def test_dense_output_large_inner():
         values, [offsets], [1], _PADDING
     )
 
-    assert padded.shape == (1, 1, _LARGE_INNER)
+    assert padded.shape == (1, 1, _LARGE_INNER)  # nosec B101
     # The single row is inside the jagged region, so JaggedOpCopyX copies values
     # across the whole inner dim - including the final pair, which is where the
     # unguarded loop test would have wrapped.
-    assert _uniform(padded[0, 0], 5.0)
+    assert _uniform(padded[0, 0], 5.0)  # nosec B101
 
 
 def test_jagged_output_large_inner():
@@ -172,5 +171,5 @@ def test_jagged_output_large_inner():
 
     output = torch.ops.fbgemm.dense_to_jagged_forward(dense, [offsets], 1)
 
-    assert output.shape == (1, _LARGE_INNER)
-    assert _uniform(output[0], 5.0)
+    assert output.shape == (1, _LARGE_INNER)  # nosec B101
+    assert _uniform(output[0], 5.0)  # nosec B101

@@ -33,10 +33,9 @@ under test.
    behavior change: such a call previously returned a result.
 """
 
+import fbgemm_xpu  # noqa: F401  - registers the fbgemm XPU operators
 import pytest
 import torch
-
-import fbgemm_xpu  # noqa: F401  - registers the fbgemm XPU operators
 
 pytestmark = pytest.mark.skipif(
     not torch.xpu.is_available(), reason="requires an XPU device"
@@ -92,7 +91,7 @@ def test_add_rejects_cpu_offsets(dtype):
 def test_add_rejects_empty_cpu_dense(dtype):
     """An empty dense operand on the host is rejected, not early-returned."""
     x_values, offsets, dense = _jagged_args(dtype, max_l=0)
-    assert dense.numel() == 0, "must reach the y.numel() == 0 early return"
+    assert dense.numel() == 0, "must reach the y.numel() == 0 early return"  # nosec B101
 
     with pytest.raises(RuntimeError, match=_REJECTED):
         torch.ops.fbgemm.jagged_dense_elementwise_add_jagged_output(
@@ -137,8 +136,8 @@ def test_add_accepts_second_xpu(dtype):
         x_values.to("xpu:1"), [offsets.to("xpu:1")], dense.to("xpu:1")
     )
 
-    assert actual.device == torch.device("xpu:1")
-    assert torch.equal(actual.cpu(), expected)
+    assert actual.device == torch.device("xpu:1")  # nosec B101
+    assert torch.equal(actual.cpu(), expected)  # nosec B101
 
 
 @pytest.mark.parametrize("dtype", _DTYPES)
@@ -203,4 +202,4 @@ def test_xpu_usable_after_rejection(dtype):
     )
     torch.xpu.synchronize()
 
-    assert torch.equal(actual.cpu(), expected)
+    assert torch.equal(actual.cpu(), expected)  # nosec B101

@@ -27,10 +27,9 @@ D-parametrized coverage in the jagged suite.
 
 import itertools
 
+import fbgemm_xpu  # noqa: F401  - registers the fbgemm XPU operators
 import pytest
 import torch
-
-import fbgemm_xpu  # noqa: F401  - registers the fbgemm XPU operators
 
 pytestmark = pytest.mark.skipif(
     not torch.xpu.is_available(), reason="requires an XPU device"
@@ -91,7 +90,7 @@ def test_jagged_to_padded_dense_forward_inner_dim(dtype, inner_dim):
     for i, n in enumerate(_LENGTHS):
         expected[i, :n] = values[start : start + n]
         start += n
-    assert torch.equal(output, expected)
+    assert torch.equal(output, expected)  # nosec B101
 
 
 @pytest.mark.parametrize("inner_dim", _INNER_DIMS)
@@ -102,7 +101,7 @@ def test_dense_to_jagged_forward_inner_dim(dtype, inner_dim):
 
     output = torch.ops.fbgemm.dense_to_jagged_forward(dense, [offsets], _TOTAL_L)
 
-    assert torch.equal(output, _gathered(dense))
+    assert torch.equal(output, _gathered(dense))  # nosec B101
 
 
 @pytest.mark.parametrize("inner_dim", _INNER_DIMS)
@@ -115,4 +114,4 @@ def test_add_jagged_output_inner_dim(dtype, inner_dim):
         values, [offsets], dense
     )
 
-    assert torch.equal(output, values + _gathered(dense))
+    assert torch.equal(output, values + _gathered(dense))  # nosec B101

@@ -50,10 +50,9 @@ rerouted to the generic kernel and cover nothing.
    paths, so mismatched shapes are not reported for it.
 """
 
+import fbgemm_xpu  # noqa: F401  - registers the fbgemm XPU operators
 import pytest
 import torch
-
-import fbgemm_xpu  # noqa: F401  - registers the fbgemm XPU operators
 
 pytestmark = pytest.mark.skipif(
     not torch.xpu.is_available(), reason="requires an XPU device"
@@ -82,10 +81,10 @@ def _assert_fast_path_shapes(dense):
     the generic kernel and leave the regression uncovered. matches_opt() also
     inspects the internally allocated output, which is not reachable from here.
     """
-    assert dense.dim() - 2 == 1, "fast path requires exactly one jagged dim"
-    assert dense.stride(-1) == 1
-    assert dense.stride(-2) % 8 == 0
-    assert dense.data_ptr() % 16 == 0
+    assert dense.dim() - 2 == 1, "fast path requires exactly one jagged dim"  # nosec B101
+    assert dense.stride(-1) == 1  # nosec B101
+    assert dense.stride(-2) % 8 == 0  # nosec B101
+    assert dense.data_ptr() % 16 == 0  # nosec B101
 
 
 def _add(x_values, offsets, dense):
@@ -144,7 +143,7 @@ def test_add_rejects_long_offsets(dtype, index_dtype):
     x_values = torch.ones(_TOTAL_L, _E, device="xpu", dtype=dtype)
     offsets = torch.tensor([0, 1, 2, 2], device="xpu", dtype=index_dtype)
     dense = torch.ones(_B, _MAX_L, _E, device="xpu", dtype=dtype)
-    assert offsets.numel() == _B + 2
+    assert offsets.numel() == _B + 2  # nosec B101
     _assert_fast_path_shapes(dense)
 
     with pytest.raises(RuntimeError, match=_BAD_OFFSETS):
@@ -158,7 +157,7 @@ def test_add_rejects_short_offsets(dtype, index_dtype):
     x_values = torch.ones(_TOTAL_L, _E, device="xpu", dtype=dtype)
     offsets = torch.tensor([0, 1], device="xpu", dtype=index_dtype)
     dense = torch.ones(_B, _MAX_L, _E, device="xpu", dtype=dtype)
-    assert offsets.numel() == _B
+    assert offsets.numel() == _B  # nosec B101
     _assert_fast_path_shapes(dense)
 
     with pytest.raises(RuntimeError, match=_BAD_OFFSETS):
@@ -171,7 +170,7 @@ def test_dense_to_jagged_rejects_long_offsets(dtype, index_dtype):
     """dense_to_jagged shares the helper, so it rejects the extra interval."""
     offsets = torch.tensor([0, 1, 2, 2], device="xpu", dtype=index_dtype)
     dense = torch.ones(_B, _MAX_L, _E, device="xpu", dtype=dtype)
-    assert offsets.numel() == _B + 2
+    assert offsets.numel() == _B + 2  # nosec B101
     _assert_fast_path_shapes(dense)
 
     with pytest.raises(RuntimeError, match=_BAD_OFFSETS):
@@ -184,7 +183,7 @@ def test_dense_to_jagged_rejects_short_offsets(dtype, index_dtype):
     """The out-of-bounds staging read is rejected at the API boundary."""
     offsets = torch.tensor([0, 1], device="xpu", dtype=index_dtype)
     dense = torch.ones(_B, _MAX_L, _E, device="xpu", dtype=dtype)
-    assert offsets.numel() == _B
+    assert offsets.numel() == _B  # nosec B101
     _assert_fast_path_shapes(dense)
 
     with pytest.raises(RuntimeError, match=_BAD_OFFSETS):
@@ -214,7 +213,7 @@ def test_add_well_formed_still_matches_generic_path(index_dtype):
         dense.to(device="xpu", dtype=_GENERIC),
     )
 
-    assert torch.equal(fast.to(torch.float32), generic)
+    assert torch.equal(fast.to(torch.float32), generic)  # nosec B101
 
 
 @pytest.mark.parametrize("index_dtype", _INDEX_DTYPES)
@@ -226,7 +225,7 @@ def test_dense_to_jagged_well_formed_still_matches_generic_path(index_dtype):
     fast = _dense_to_jagged(dense.to(device="xpu", dtype=_FAST), offsets)
     generic = _dense_to_jagged(dense.to(device="xpu", dtype=_GENERIC), offsets)
 
-    assert torch.equal(fast.to(torch.float32), generic)
+    assert torch.equal(fast.to(torch.float32), generic)  # nosec B101
 
 
 @pytest.mark.parametrize("dtype", [_FAST, _GENERIC])
@@ -236,12 +235,12 @@ def test_empty_dense_still_short_circuits(dtype):
     offsets = torch.tensor([0, 1, _TOTAL_L], device="xpu", dtype=torch.int64)
     # Mismatched inner width *and* an empty dense operand.
     dense = torch.ones(_B, 0, 2 * _E, device="xpu", dtype=dtype)
-    assert dense.numel() == 0, "must reach the y.numel() == 0 early return"
+    assert dense.numel() == 0, "must reach the y.numel() == 0 early return"  # nosec B101
 
     output, _ = _add(x_values, offsets, dense)
     torch.xpu.synchronize()
 
-    assert torch.equal(output, x_values)
+    assert torch.equal(output, x_values)  # nosec B101
 
 
 @pytest.mark.parametrize("dtype", [_FAST, _GENERIC])
@@ -259,4 +258,4 @@ def test_xpu_usable_after_rejection(dtype):
     )
     torch.xpu.synchronize()
 
-    assert torch.equal(output, x_values + 1)
+    assert torch.equal(output, x_values + 1)  # nosec B101

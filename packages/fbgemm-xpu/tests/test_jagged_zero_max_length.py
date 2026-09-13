@@ -27,10 +27,9 @@ pinned against a CPU reference here rather than against hardcoded values.
    rather than a porting correction; do not "restore" it to match upstream.
 """
 
+import fbgemm_xpu  # noqa: F401  - registers the fbgemm XPU operators
 import pytest
 import torch
-
-import fbgemm_xpu  # noqa: F401  - registers the fbgemm XPU operators
 
 pytestmark = pytest.mark.skipif(
     not torch.xpu.is_available(), reason="requires an XPU device"
@@ -73,9 +72,9 @@ def test_dense_to_jagged_zero_max_length(dtype, index_dtype):
         dense.to("xpu"), [offsets.to("xpu")], _TOTAL_L
     )
 
-    assert actual.shape == (_TOTAL_L, _E)
-    assert torch.equal(expected, torch.zeros_like(expected)), "CPU baseline"
-    assert torch.equal(actual.cpu(), expected)
+    assert actual.shape == (_TOTAL_L, _E)  # nosec B101
+    assert torch.equal(expected, torch.zeros_like(expected)), "CPU baseline"  # nosec B101
+    assert torch.equal(actual.cpu(), expected)  # nosec B101
 
 
 @pytest.mark.usefixtures("fill_uninitialized_memory")
@@ -94,5 +93,5 @@ def test_add_jagged_output_zero_max_length(dtype, index_dtype):
         x_values.to("xpu"), [offsets.to("xpu")], dense.to("xpu")
     )
 
-    assert torch.equal(expected, x_values), "CPU baseline"
-    assert torch.equal(actual.cpu(), expected)
+    assert torch.equal(expected, x_values), "CPU baseline"  # nosec B101
+    assert torch.equal(actual.cpu(), expected)  # nosec B101

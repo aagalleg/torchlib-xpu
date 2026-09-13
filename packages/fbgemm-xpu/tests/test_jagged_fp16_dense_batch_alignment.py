@@ -33,10 +33,9 @@ and rejecting it would cost throughput for nothing.
    from upstream rather than a porting correction - do not "restore" them.
 """
 
+import fbgemm_xpu  # noqa: F401  - registers the fbgemm XPU operators
 import pytest
 import torch
-
-import fbgemm_xpu  # noqa: F401  - registers the fbgemm XPU operators
 
 pytestmark = pytest.mark.skipif(
     not torch.xpu.is_available(), reason="requires an XPU device"
@@ -80,11 +79,11 @@ def _assert_matched_old_criteria(dense, *, batch_stride_aligned):
     matches_opt() also inspects the internally allocated output and jagged
     operand, which are contiguous by construction and not reachable from here.
     """
-    assert dense.dim() - 2 == 1, "fast path requires exactly one jagged dim"
-    assert dense.stride(-1) == 1
-    assert dense.stride(-2) % 8 == 0
-    assert dense.data_ptr() % 16 == 0
-    assert (dense.stride(0) % 8 == 0) == batch_stride_aligned
+    assert dense.dim() - 2 == 1, "fast path requires exactly one jagged dim"  # nosec B101
+    assert dense.stride(-1) == 1  # nosec B101
+    assert dense.stride(-2) % 8 == 0  # nosec B101
+    assert dense.data_ptr() % 16 == 0  # nosec B101
+    assert (dense.stride(0) % 8 == 0) == batch_stride_aligned  # nosec B101
 
 
 @pytest.mark.parametrize("batch_stride", [_MISALIGNED_BATCH_STRIDE, _ALIGNED_BATCH_STRIDE])
@@ -108,14 +107,14 @@ def test_add_strided_dense_matches_generic_path(index_dtype, batch_stride):
     expected = x_values.to(device="xpu", dtype=_FAST) + dense_fast.reshape(
         _TOTAL_L, _E
     )
-    assert torch.equal(fast, expected)
+    assert torch.equal(fast, expected)  # nosec B101
 
     generic, _ = torch.ops.fbgemm.jagged_dense_elementwise_add_jagged_output(
         x_values.to(device="xpu", dtype=_GENERIC),
         [offsets],
         _strided_dense(batch_stride, _GENERIC),
     )
-    assert torch.equal(fast.to(_GENERIC), generic)
+    assert torch.equal(fast.to(_GENERIC), generic)  # nosec B101
 
 
 @pytest.mark.parametrize("batch_stride", [_MISALIGNED_BATCH_STRIDE, _ALIGNED_BATCH_STRIDE])
@@ -136,12 +135,12 @@ def test_dense_to_jagged_strided_dense_matches_generic_path(
     )
 
     # Each output row is its dense row, verbatim.
-    assert torch.equal(fast, dense_fast.reshape(_TOTAL_L, _E))
+    assert torch.equal(fast, dense_fast.reshape(_TOTAL_L, _E))  # nosec B101
 
     generic = torch.ops.fbgemm.dense_to_jagged_forward(
         _strided_dense(batch_stride, _GENERIC), [offsets], _TOTAL_L
     )
-    assert torch.equal(fast.to(_GENERIC), generic)
+    assert torch.equal(fast.to(_GENERIC), generic)  # nosec B101
 
 
 @pytest.mark.parametrize("index_dtype", _INDEX_DTYPES)
@@ -152,7 +151,7 @@ def test_add_broadcast_dense_batch_still_correct(index_dtype):
 
     row = torch.arange(1, _E + 1, device="xpu", dtype=_FAST)
     dense = row.expand(_B, _MAX_L, _E)
-    assert dense.stride(0) == 0
+    assert dense.stride(0) == 0  # nosec B101
     _assert_matched_old_criteria(dense, batch_stride_aligned=True)
 
     fast, _ = torch.ops.fbgemm.jagged_dense_elementwise_add_jagged_output(
@@ -160,7 +159,7 @@ def test_add_broadcast_dense_batch_still_correct(index_dtype):
     )
 
     expected = x_values.to(device="xpu", dtype=_FAST) + row
-    assert torch.equal(fast, expected)
+    assert torch.equal(fast, expected)  # nosec B101
 
 
 @pytest.mark.parametrize("index_dtype", _INDEX_DTYPES)
@@ -171,7 +170,7 @@ def test_add_contiguous_dense_unaffected(index_dtype):
     dense = torch.arange(
         1, _B * _MAX_L * _E + 1, device="xpu", dtype=_FAST
     ).view(_B, _MAX_L, _E)
-    assert dense.stride(0) % 8 == 0
+    assert dense.stride(0) % 8 == 0  # nosec B101
     _assert_matched_old_criteria(dense, batch_stride_aligned=True)
 
     fast, _ = torch.ops.fbgemm.jagged_dense_elementwise_add_jagged_output(
@@ -181,4 +180,4 @@ def test_add_contiguous_dense_unaffected(index_dtype):
     expected = x_values.to(device="xpu", dtype=_FAST) + dense.reshape(
         _TOTAL_L, _E
     )
-    assert torch.equal(fast, expected)
+    assert torch.equal(fast, expected)  # nosec B101

@@ -53,10 +53,9 @@ Each test is skipped unless the device has enough free memory; the smallest shap
 that trips either limit needs multi-gigabyte operands.
 """
 
+import fbgemm_xpu  # noqa: F401  - registers the fbgemm XPU operators
 import pytest
 import torch
-
-import fbgemm_xpu  # noqa: F401  - registers the fbgemm XPU operators
 
 pytestmark = pytest.mark.skipif(
     not torch.xpu.is_available(), reason="requires an XPU device"
@@ -102,7 +101,7 @@ def _require_memory(num_elements: int) -> None:
 _OUT_D = 64
 _OUT_MAX_L = 32
 _OUT_THREADS_X = _threads_x(_OUT_D)
-assert _OUT_THREADS_X == 32, "D must saturate threads_x or the cap is unreachable"
+assert _OUT_THREADS_X == 32, "D must saturate threads_x or the cap is unreachable"  # nosec B101
 
 # Largest work-group count whose flattened launch still fits in an int32_t, then
 # the smallest outer * folded that asks for one more group than that. Uncapped,
@@ -137,9 +136,9 @@ def test_jagged_to_padded_dense_forward_large_grid():
         x_values, [offsets], [_OUT_MAX_L], _OUT_PADDING
     )
 
-    assert output.shape == (_OUT_B, _OUT_MAX_L, _OUT_D)
-    assert torch.equal(output[0, :_OUT_L], x_values)
-    assert torch.equal(
+    assert output.shape == (_OUT_B, _OUT_MAX_L, _OUT_D)  # nosec B101
+    assert torch.equal(output[0, :_OUT_L], x_values)  # nosec B101
+    assert torch.equal(  # nosec B101
         output[0, _OUT_L:],
         torch.full_like(output[0, _OUT_L:], _OUT_PADDING),
     )
@@ -147,8 +146,8 @@ def test_jagged_to_padded_dense_forward_large_grid():
     # (oidx, jidx) pairs on its first trip, leaving exactly _THREADS_Y - which is
     # precisely the final batch row's _OUT_MAX_L positions. So this row is
     # reached only by a second trip round the group-stride loop.
-    assert _OUT_OUTER_FOLDED - _OUT_MAX_BLOCKS * _THREADS_Y == _OUT_MAX_L
-    assert torch.equal(
+    assert _OUT_OUTER_FOLDED - _OUT_MAX_BLOCKS * _THREADS_Y == _OUT_MAX_L  # nosec B101
+    assert torch.equal(  # nosec B101
         output[-1], torch.full_like(output[-1], _OUT_PADDING)
     )
 
@@ -163,7 +162,7 @@ def test_jagged_to_padded_dense_forward_large_grid():
 # is still legal - see the module docstring.
 _D = 1
 _THREADS_X = _threads_x(_D)
-assert _THREADS_X == _D, "D must equal threads_x or the cap is unreachable"
+assert _THREADS_X == _D, "D must equal threads_x or the cap is unreachable"  # nosec B101
 
 _MAX_BLOCKS = (2**31 - 1) // (_THREADS_X * _THREADS_Y)
 _NNZ = _MAX_BLOCKS * _THREADS_Y + 1
@@ -171,8 +170,8 @@ _NNZ = _MAX_BLOCKS * _THREADS_Y + 1
 # The launch these operators would issue uncapped, and the reason nothing rejects
 # the shape first: the kernels build packed_accessor32 unconditionally, so an
 # over-limit numel would raise in ATen before the submit. At D = 1 it does not.
-assert -(-_NNZ // _THREADS_Y) * _THREADS_Y * _THREADS_X > 2**31 - 1
-assert _NNZ * _D <= 2**31 - 1
+assert -(-_NNZ // _THREADS_Y) * _THREADS_Y * _THREADS_X > 2**31 - 1  # nosec B101
+assert _NNZ * _D <= 2**31 - 1  # nosec B101
 
 # The jagged region is deliberately tiny: only nnz drives the grid, so a short
 # dense operand keeps every allocation below to the [nnz, D] jagged tensors.
@@ -198,11 +197,11 @@ def test_jagged_to_padded_dense_backward_large_grid():
         dense, [_offsets()], _NNZ
     )
 
-    assert grad_values.shape == (_NNZ, _D)
+    assert grad_values.shape == (_NNZ, _D)  # nosec B101
     # Rows inside the jagged region receive the dense gradient; the rest are the
     # zeros the operator pre-allocated for the portion truncated in forward.
-    assert torch.equal(grad_values[: _LENGTHS[0]], dense[0])
-    assert torch.count_nonzero(grad_values[_LENGTHS[0] :]) == 0
+    assert torch.equal(grad_values[: _LENGTHS[0]], dense[0])  # nosec B101
+    assert torch.count_nonzero(grad_values[_LENGTHS[0] :]) == 0  # nosec B101
 
 
 def test_jagged_dense_elementwise_add_jagged_output_large_grid():
@@ -218,13 +217,13 @@ def test_jagged_dense_elementwise_add_jagged_output_large_grid():
         x_values, [_offsets()], dense
     )
 
-    assert output.shape == (_NNZ, _D)
-    assert torch.equal(output[: _LENGTHS[0]], x_values[: _LENGTHS[0]] + dense[0])
+    assert output.shape == (_NNZ, _D)  # nosec B101
+    assert torch.equal(output[: _LENGTHS[0]], x_values[: _LENGTHS[0]] + dense[0])  # nosec B101
     # Rows past the jagged region add zero, so they must be exactly x. At this
     # nnz the cap drops a single row - the capped launch covers
     # _MAX_BLOCKS * _THREADS_Y == _NNZ - 1 of them - so the final row is
     # reached only by a second trip round the group-stride loop.
-    assert torch.equal(output[_LENGTHS[0] :], x_values[_LENGTHS[0] :])
+    assert torch.equal(output[_LENGTHS[0] :], x_values[_LENGTHS[0] :])  # nosec B101
 
 
 def test_dense_to_jagged_forward_large_grid():
@@ -234,8 +233,8 @@ def test_dense_to_jagged_forward_large_grid():
 
     output = torch.ops.fbgemm.dense_to_jagged_forward(dense, [_offsets()], _NNZ)
 
-    assert output.shape == (_NNZ, _D)
-    assert torch.equal(output[: _LENGTHS[0]], dense[0])
+    assert output.shape == (_NNZ, _D)  # nosec B101
+    assert torch.equal(output[: _LENGTHS[0]], dense[0])  # nosec B101
     # Rows past the jagged region gather zero. The output buffer starts
     # uninitialized, so this also checks the capped launch reached those rows.
-    assert torch.count_nonzero(output[_LENGTHS[0] :]) == 0
+    assert torch.count_nonzero(output[_LENGTHS[0] :]) == 0  # nosec B101

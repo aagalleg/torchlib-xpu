@@ -32,10 +32,9 @@ both need covering.
    "restore" it to match upstream.
 """
 
+import fbgemm_xpu  # noqa: F401  - registers the fbgemm XPU operators
 import pytest
 import torch
-
-import fbgemm_xpu  # noqa: F401  - registers the fbgemm XPU operators
 
 pytestmark = pytest.mark.skipif(
     not torch.xpu.is_available(), reason="requires an XPU device"
@@ -63,18 +62,18 @@ def test_dense_to_jagged_fp16_row_past_last_offset(index_dtype):
     # shapes above cannot quietly reroute this to the generic kernel and leave
     # the regression uncovered. matches_opt() also inspects the internally
     # allocated output, which is not reachable from here.
-    assert dense.dim() - 2 == 1, "fast path requires exactly one jagged dim"
-    assert dense.stride(-1) == 1
-    assert dense.stride(-2) % 8 == 0
-    assert dense.data_ptr() % 16 == 0
+    assert dense.dim() - 2 == 1, "fast path requires exactly one jagged dim"  # nosec B101
+    assert dense.stride(-1) == 1  # nosec B101
+    assert dense.stride(-2) % 8 == 0  # nosec B101
+    assert dense.data_ptr() % 16 == 0  # nosec B101
 
     output = torch.ops.fbgemm.dense_to_jagged_forward(dense, [offsets], _TOTAL_L)
 
-    assert output.shape == (_TOTAL_L, _E)
+    assert output.shape == (_TOTAL_L, _E)  # nosec B101
     # Row 0 is inside the jagged region and gathers dense row 0.
-    assert torch.equal(output[0], dense[0, 0])
+    assert torch.equal(output[0], dense[0, 0])  # nosec B101
     # Row 1 is past offsets[-1]. Before the fix this was dense[1, 0].
-    assert torch.equal(output[1], torch.zeros_like(output[1]))
+    assert torch.equal(output[1], torch.zeros_like(output[1]))  # nosec B101
 
 
 @pytest.mark.parametrize("index_dtype", [torch.int32, torch.int64])
@@ -91,4 +90,4 @@ def test_dense_to_jagged_fp16_matches_generic_path(index_dtype):
         values.to(device="xpu", dtype=torch.float32), [offsets], _TOTAL_L
     )
 
-    assert torch.equal(fast.to(torch.float32), generic)
+    assert torch.equal(fast.to(torch.float32), generic)  # nosec B101
