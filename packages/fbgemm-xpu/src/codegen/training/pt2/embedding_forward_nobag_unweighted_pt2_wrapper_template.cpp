@@ -31,6 +31,8 @@
 //
 ////////////////////////////////////////////////////////////////////////////////
 
+#include "fbgemm_utils/pt2_arg_utils.h"
+
 #include <torch/all.h>
 #include <torch/library.h>
 #include <ATen/ATen.h>
@@ -114,18 +116,13 @@ namespace fbgemm_xpu {
 
     Tensor {{ mdesc }}_embedding_nobag_backward_codegen_{{ optimizer }}_unweighted_pt2_xpu_wrapper(
         const Tensor& grad_output,
-        const Tensor& /*host_weights*/,
-        const Tensor& dev_weights,
-        const Tensor& uvm_weights,
-        const Tensor& lxu_cache_weights,
-        const Tensor& weights_placements,
-        const Tensor& weights_offsets,
+        const at::TensorList weights,
         const c10::SymInt D,
         const Tensor& hash_size_cumsum,
         const int64_t total_hash_size_bits,
         const Tensor& indices,
         const Tensor& offsets,
-        const Tensor& lxu_cache_locations,
+        const at::TensorList aux_tensor_bwd,
         const int64_t BT_block_size,
         const int64_t max_segment_length_per_warp,
         const bool stochastic_rounding,
@@ -144,6 +141,22 @@ namespace fbgemm_xpu {
         int64_t weight_decay_mode,
         double max_norm
         ){
+        TORCH_CHECK(
+            weights.size() == 5,
+            "XPU weights must contain dev, placements, offsets, uvm, and lxu_cache");
+        const auto& dev_weights = weights[0];
+        const auto& weights_placements = weights[1];
+        const auto& weights_offsets = weights[2];
+        const auto& uvm_weights = weights[3];
+        const auto& lxu_cache_weights = weights[4];
+        TORCH_CHECK(
+            aux_tensor_bwd.size() == 1,
+            "aux_tensor_bwd must contain lxu_cache_locations, got ",
+            aux_tensor_bwd.size(),
+            " tensors");
+        const auto& lxu_cache_locations =
+            aux_tensor_bwd[IDX_BWD_LXU_CACHE_LOCATIONS];
+
         static auto op =
             torch::Dispatcher::singleton()
                 .findSchemaOrThrow("fbgemm::{{ mdesc }}_embedding_nobag_backward_codegen_{{ optimizer }}_unweighted_exact_xpu", "")

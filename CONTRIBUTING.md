@@ -100,6 +100,7 @@ Use the following compatibility table when self-building the project and its dep
 
 | PyTorch | Torchvision | oneAPI         |
 | ------- | ----------- | -------------- |
+| 2.14    | 0.29        | [2026.1][2-14] |
 | 2.13    | 0.28        | [2026.0][2-13] |
 | 2.12    | 0.27        | [2025.3][2-12] |
 | 2.11    | 0.26        | [2025.3][2-11] |
@@ -109,6 +110,7 @@ Use the following compatibility table when self-building the project and its dep
 
 [TorchCodec]: https://github.com/meta-pytorch/torchcodec
 
+[2-14]: https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpu/2-14.html
 [2-13]: https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpu/2-13.html
 [2-12]: https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpu/2-12.html
 [2-11]: https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpu/2-11.html
