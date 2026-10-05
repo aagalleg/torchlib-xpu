@@ -8,10 +8,10 @@ backward:
 - `dense_to_jagged`
 - `jagged_dense_elementwise_add_jagged_output`
 
-| Hardware | File | Status |
-| --- | --- | --- |
-| Intel® Data Center GPU Max 1550 (PVC), one tile | [pvc-max1550/jagged_tensor.csv](pvc-max1550/jagged_tensor.csv) | committed |
-| Intel® Arc™ Pro B60 Graphics (BMG) | [bmg-b60/jagged_tensor.csv](bmg-b60/jagged_tensor.csv) | committed |
+| Hardware | File |
+| --- | --- |
+| Intel® Data Center GPU Max 1550 (PVC), one tile | [pvc-max1550/jagged_tensor.csv](pvc-max1550/jagged_tensor.csv) |
+| Intel® Arc™ Pro B60 Graphics (BMG) | [bmg-b60/jagged_tensor.csv](bmg-b60/jagged_tensor.csv) |
 
 ## Reproduce
 
