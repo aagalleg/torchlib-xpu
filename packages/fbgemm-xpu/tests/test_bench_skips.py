@@ -30,20 +30,20 @@ def test_skipped_on_xpu_logs_instead_of_running(caplog):
     with caplog.at_level(logging.INFO):
         case(batch_size=4)
 
-    assert calls == []
-    assert case.__name__ == "case"
-    assert "SKIPPED case on xpu: no XPU implementation" in caplog.text
+    assert calls == []  # nosec B101
+    assert case.__name__ == "case"  # nosec B101
+    assert "SKIPPED case on xpu: no XPU implementation" in caplog.text  # nosec B101
 
 
 @pytest.mark.parametrize("only", [None, ""])
 def test_drop_without_only_runs_all_remaining(only, caplog):
     benchmarks = _benchmarks()
     with caplog.at_level(logging.INFO):
-        assert drop_xpu_skipped_sub_benchmarks(benchmarks, only) is None
+        assert drop_xpu_skipped_sub_benchmarks(benchmarks, only) is None  # nosec B101
 
-    assert list(benchmarks) == _RUNNABLE
+    assert list(benchmarks) == _RUNNABLE  # nosec B101
     for name in XPU_SKIPPED_SUB_BENCHMARKS:
-        assert f"SKIPPED {name} on xpu" in caplog.text
+        assert f"SKIPPED {name} on xpu" in caplog.text  # nosec B101
 
 
 def test_drop_with_only_logs_requested_skips(caplog):
@@ -54,12 +54,12 @@ def test_drop_with_only_logs_requested_skips(caplog):
             benchmarks, f"{skipped}, bench_jagged_2d_to_dense,unknown"
         )
 
-    assert only == "bench_jagged_2d_to_dense,unknown"
-    assert list(benchmarks) == _RUNNABLE
-    assert f"SKIPPED {skipped} on xpu" in caplog.text
-    assert other_skipped not in caplog.text
+    assert only == "bench_jagged_2d_to_dense,unknown"  # nosec B101
+    assert list(benchmarks) == _RUNNABLE  # nosec B101
+    assert f"SKIPPED {skipped} on xpu" in caplog.text  # nosec B101
+    assert other_skipped not in caplog.text  # nosec B101
 
 
 def test_drop_with_only_skipped_returns_empty():
     only = ",".join(XPU_SKIPPED_SUB_BENCHMARKS)
-    assert drop_xpu_skipped_sub_benchmarks(_benchmarks(), only) == ""
+    assert drop_xpu_skipped_sub_benchmarks(_benchmarks(), only) == ""  # nosec B101

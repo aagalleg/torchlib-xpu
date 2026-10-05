@@ -31,7 +31,7 @@ def test_time_is_bounded_by_device_bandwidth():
     seconds, _ = benchmark_torch_function(dst.copy_, (src,), iters=5)
 
     moved = 2 * src.numel() * src.element_size()
-    assert seconds > moved / _MAX_PLAUSIBLE_BYTES_PER_S
+    assert seconds > moved / _MAX_PLAUSIBLE_BYTES_PER_S  # nosec B101
 
 
 def _copy_bytes_per_s(numel, **kwargs):
@@ -48,7 +48,7 @@ def test_default_flush_evicts_last_level_cache():
     llc_floats = torch.xpu.get_device_properties().last_level_cache_size // 4
     resident = _copy_bytes_per_s(llc_floats // 4)
     streaming = _copy_bytes_per_s(8 * llc_floats, flush_gpu_cache_size_mb=0)
-    assert resident < 1.25 * streaming
+    assert resident < 1.25 * streaming  # nosec B101
 
 
 def test_returns_output_and_passes_kwargs():
@@ -69,8 +69,8 @@ def test_host_submission_latency_is_not_timed(caplog):
 
     with caplog.at_level(logging.WARNING):
         seconds, _ = benchmark_torch_function(host_heavy, (), iters=5)
-    assert seconds < 0.5e-3
-    assert "waited for the host" not in caplog.text
+    assert seconds < 0.5e-3  # nosec B101
+    assert "waited for the host" not in caplog.text  # nosec B101
 
 
 def test_warns_when_f_synchronises(caplog):
@@ -82,7 +82,7 @@ def test_warns_when_f_synchronises(caplog):
 
     with caplog.at_level(logging.WARNING):
         benchmark_torch_function(synchronising, (), iters=2, flush_gpu_cache_size_mb=0)
-    assert "waited for the host" in caplog.text
+    assert "waited for the host" in caplog.text  # nosec B101
 
 
 @pytest.mark.parametrize("device", ["cpu", "mtia"])
