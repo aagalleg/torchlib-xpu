@@ -35,7 +35,9 @@ def test_time_is_bounded_by_device_bandwidth():
 
 
 def _copy_bytes_per_s(numel, **kwargs):
-    src = torch.empty(numel, dtype=torch.float, device="xpu")
+    # Random, not uninitialised: freshly allocated memory is typically zeroed,
+    # and memory compression can then report more than the real bandwidth.
+    src = torch.rand(numel, dtype=torch.float, device="xpu")
     dst = torch.empty_like(src)
     seconds, _ = benchmark_torch_function(dst.copy_, (src,), iters=20, **kwargs)
     return 2 * src.numel() * src.element_size() / seconds
