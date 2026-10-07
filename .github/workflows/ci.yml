@@ -477,7 +477,9 @@ jobs:
         # Upstream FBGEMM tests (patched) cover shared operator behavior and parity.
         # The tests below cover XPU/SYCL cases that upstream does not:
         # launch-grid limits, device validation, and strided fast-path inputs.
-        pytest -rsf torchlib-xpu/packages/fbgemm-xpu/tests/
+        # faulthandler_timeout dumps every thread's stack if a test runs over
+        # 10 minutes, so a hang shows where it is stuck.
+        pytest -rsf -o faulthandler_timeout=600 torchlib-xpu/packages/fbgemm-xpu/tests/
     - name: 'Smoke run jagged sweep'
       run: |
         # jagged-sweep checks each case against CPU before timing it; the
