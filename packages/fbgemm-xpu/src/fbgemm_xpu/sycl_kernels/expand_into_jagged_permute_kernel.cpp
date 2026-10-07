@@ -22,6 +22,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 #include "expand_into_jagged_permute_kernel.h"
+#include "fbgemm_utils/utils.h"
 
 namespace fbgemm_xpu {
 
@@ -101,6 +102,8 @@ at::Tensor expand_into_jagged_permute_xpu(
     TORCH_CHECK(permute.numel() == input_offsets.numel() - 1);
     TORCH_CHECK(permute.numel() == output_offsets.numel() - 1);
 
+    SYCL_DEVICE_GUARD(permute);
+
     // Ensure contiguous for direct pointer access.
     const auto permute_contig = permute.contiguous();
     const auto input_offsets_contig = input_offsets.contiguous();
@@ -110,10 +113,7 @@ at::Tensor expand_into_jagged_permute_xpu(
 
     at::Tensor output_permute = at::empty({output_size}, permute.options());
 
-    // Use the current stream for the inputs' XPU device. The process-wide
-    // current device can differ in multi-XPU applications.
-    sycl::queue& queue = c10::xpu::getCurrentXPUStream(
-        permute.device().index()).queue();
+    sycl::queue& queue = c10::xpu::getCurrentXPUStream().queue();
 
     // Work-group layout mirrors the CUDA dim3(kWarpSize, T_blocks) launch with
     // the dimension order reversed, because SYCL varies the last nd_range
