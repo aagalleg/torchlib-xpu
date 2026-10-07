@@ -127,7 +127,8 @@ def _sweep_metadata(**spec: object) -> dict[str, object]:
         "timing": "median of XPU event times, 2 warm-ups, "
         f"{2 * torch.xpu.get_device_properties().last_level_cache_size >> 20} MB "
         "cache flush (2x last-level cache) per iteration, then "
-        f"{gpu_lead_method()} so the GPU does not wait for the host in the timed window",
+        f"{gpu_lead_method()} sized from the fastest warm-up "
+        "so the GPU does not wait for the host in the timed window",
         "lengths": "uniform integers in [0, max_len], one draw per shape",
         **spec,
     }

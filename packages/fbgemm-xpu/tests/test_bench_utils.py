@@ -25,8 +25,20 @@ pytestmark = pytest.mark.skipif(
 _MAX_PLAUSIBLE_BYTES_PER_S = 10e12
 
 
+@pytest.fixture(autouse=True)
+def _release_device_memory():
+    # The caching allocator keeps the copy operands below reserved after a test
+    # ends. Return them to the driver: the GPU may be shared with another test
+    # process, and later tests size their operands to the device's free memory.
+    yield
+    torch.xpu.empty_cache()
+
+
 def test_time_is_bounded_by_device_bandwidth():
-    src = torch.empty(256 * 1024 * 1024, dtype=torch.float, device="xpu")
+    # 1 GiB moved puts the bound near 100 us, an order of magnitude above the
+    # submission time a wall clock without synchronisation would report, while
+    # keeping the footprint modest on a 12 GB part shared with another process.
+    src = torch.empty(128 * 1024 * 1024, dtype=torch.float, device="xpu")
     dst = torch.empty_like(src)
     seconds, _ = benchmark_torch_function(dst.copy_, (src,), iters=5)
 
@@ -44,13 +56,22 @@ def _copy_bytes_per_s(numel, **kwargs):
 
 
 def test_default_flush_evicts_last_level_cache():
-    # A copy that fits in the last-level cache must not beat a streaming copy
-    # far larger than it. Upstream's fixed 40 MB flush fails this on PVC (192
-    # MB L2): the operands stay resident and the copy reports ~3x HBM speed.
+    # The same copy, sized to half the last-level cache, timed with and without
+    # the default flush. Left in cache between iterations it runs at cache
+    # bandwidth; after the flush its operands must come from memory, markedly
+    # slower. Upstream's fixed 40 MB flush fails this on PVC (192 MB L2): the
+    # operands stay resident and the flushed copy is as fast as the cached one.
+    #
+    # The size is held constant on purpose. Comparing against a much larger
+    # streaming copy also measures how the memory system treats the two sizes,
+    # which varies by part: on GDDR6 a long read+write stream runs well below
+    # peak, while a short copy's writes are absorbed by the write-back cache,
+    # which no flush ahead of the copy can prevent. On BMG that pair differs by
+    # ~1.8x with the flush working correctly.
     llc_floats = torch.xpu.get_device_properties().last_level_cache_size // 4
-    resident = _copy_bytes_per_s(llc_floats // 4)
-    streaming = _copy_bytes_per_s(8 * llc_floats, flush_gpu_cache_size_mb=0)
-    assert resident < 1.25 * streaming  # nosec B101
+    cached = _copy_bytes_per_s(llc_floats // 4, flush_gpu_cache_size_mb=0)
+    flushed = _copy_bytes_per_s(llc_floats // 4)
+    assert flushed < cached / 1.5  # nosec B101
 
 
 def test_returns_output_and_passes_kwargs():

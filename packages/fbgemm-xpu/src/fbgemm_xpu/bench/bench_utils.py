@@ -27,9 +27,13 @@ from typing import Any
 import torch
 
 # GPU work queued ahead of each start event must outlast the host's submission
-# of the timed iteration; see benchmark_torch_function.
+# of the timed iteration; see benchmark_torch_function. The per-iteration lead
+# is also capped so that all iterations together queue at most
+# _MAX_TOTAL_LEAD_S: upstream benchmarks run 1000 iterations, and 1000 leads
+# at the per-iteration cap would spin the GPU for 50 s per measurement.
 _MIN_LEAD_S = 50e-6
 _MAX_LEAD_S = 50e-3
+_MAX_TOTAL_LEAD_S = 1.0
 _LEAD_ATTEMPTS = 4
 _SLEEP_CALIBRATION_CYCLES = 10_000_000
 
@@ -98,14 +102,17 @@ def benchmark_torch_function(
     Events time the GPU timeline, so if the GPU reaches the start event before
     the host has submitted ``f``, the wait for the host is timed as well. Each
     iteration therefore queues GPU work ahead of the start event, lasting twice
-    the host submission time seen in the warm-ups. The work is a
-    ``torch.xpu._sleep`` spin after the flush where the driver supports it, as
-    the spin touches no memory; otherwise the flush buffer is overwritten
-    repeatedly, which leaves the cache just as flushed. With neither, that is
-    an old driver and a flush size of 0, no work is queued. An iteration whose
-    start event completed before the host finished submitting it may include
-    such a wait; the measurement is then repeated with more work, and if the
-    wait persists, for example because ``f`` synchronises, a warning is logged.
+    the host submission time of the fastest warm-up; the first warm-up can
+    include one-time costs such as kernel compilation, which no later iteration
+    pays. The work is a ``torch.xpu._sleep`` spin after the flush where the
+    driver supports it, as the spin touches no memory; otherwise the flush
+    buffer is overwritten repeatedly, which leaves the cache just as flushed.
+    With neither, that is an old driver and a flush size of 0, no work is
+    queued. An iteration whose start event completed before the host finished
+    submitting it may include such a wait; the measurement is then repeated
+    with more work, up to a cap on the lead queued across all iterations, and
+    if the wait persists, for example because ``f`` synchronises, a warning is
+    logged.
     """
     if device not in ("xpu", "cuda", ""):
         raise ValueError(f"benchmark_torch_function times XPU only, got {device!r}")
@@ -119,7 +126,7 @@ def benchmark_torch_function(
         flush_gpu_cache_size_mb = 2 * llc_bytes // (1024 * 1024)
 
     logging.debug(f"Start to benchmark {name}...")
-    host_s = 0.0
+    host_s = math.inf
     output = None
     for _ in range(num_warmups):
         start = torch.xpu.Event(enable_timing=True)
@@ -128,8 +135,9 @@ def benchmark_torch_function(
         start.record()
         output = f(*args, **kwargs)
         end.record()
-        host_s = max(host_s, time.perf_counter() - t)
-    lead_s = min(2 * host_s + _MIN_LEAD_S, _MAX_LEAD_S)
+        host_s = min(host_s, time.perf_counter() - t)
+    max_lead_s = max(_MIN_LEAD_S, min(_MAX_LEAD_S, _MAX_TOTAL_LEAD_S / iters))
+    lead_s = min(2 * host_s + _MIN_LEAD_S, max_lead_s)
 
     cache = torch.empty(
         int(flush_gpu_cache_size_mb * 1024 * 1024 // 4), dtype=torch.float, device="xpu"
@@ -169,10 +177,12 @@ def benchmark_torch_function(
             end[i].record()
             waited += start[i].query()
         torch.xpu.synchronize()
-        if not waited or lead_s >= _MAX_LEAD_S:
+        if not waited or lead_s >= max_lead_s:
             break
-        lead_s = min(4 * lead_s, _MAX_LEAD_S)
-    if waited:
+        lead_s = min(4 * lead_s, max_lead_s)
+    # Waits inflate individual iterations; the median only reflects them once
+    # they reach half of the iterations.
+    if 2 * waited >= iters:
         logging.warning(
             f"benchmark_torch_function {name}: the GPU may have waited for the "
             f"host in {waited} of {iters} timed iterations, so the time can "
