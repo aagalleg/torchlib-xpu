@@ -46,13 +46,50 @@ def test_time_is_bounded_by_device_bandwidth():
     assert seconds > moved / _MAX_PLAUSIBLE_BYTES_PER_S  # nosec B101
 
 
-def _copy_bytes_per_s(numel, **kwargs):
+def _copy_seconds(numel, **kwargs):
     # Random, not uninitialised: freshly allocated memory is typically zeroed,
     # and memory compression can then report more than the real bandwidth.
     src = torch.rand(numel, dtype=torch.float, device="xpu")
     dst = torch.empty_like(src)
     seconds, _ = benchmark_torch_function(dst.copy_, (src,), iters=20, **kwargs)
-    return 2 * src.numel() * src.element_size() / seconds
+    return seconds
+
+
+def test_default_flush_is_twice_last_level_cache(monkeypatch):
+    # The default flush must be sized from the device and run ahead of every
+    # timed iteration. Upstream's fixed 40 MB leaves operands resident on PVC
+    # (192 MB L2). This is checked on the helper's own calls rather than on
+    # measured bandwidth, so it holds on any part and on a GPU shared with
+    # another process, where timings carry no information about the cache.
+    llc_bytes = torch.xpu.get_device_properties().last_level_cache_size
+    flush_bytes = (2 * llc_bytes >> 20) << 20
+    events = []
+
+    real_zero_ = torch.Tensor.zero_
+
+    def spy_zero_(self):
+        if self.numel() * self.element_size() == flush_bytes:
+            events.append("flush")
+        return real_zero_(self)
+
+    monkeypatch.setattr(torch.Tensor, "zero_", spy_zero_)
+
+    x = torch.zeros(1024, device="xpu")
+
+    def f():
+        events.append("f")
+        return x.add_(1)
+
+    iters, num_warmups = 5, 2
+    benchmark_torch_function(f, (), iters=iters, num_warmups=num_warmups)
+
+    assert "flush" in events  # nosec B101
+    warmups, timed = events[: events.index("flush")], events[events.index("flush") :]
+    assert warmups == ["f"] * num_warmups  # nosec B101
+    # The timed loop may be repeated with a longer GPU lead, so the count of
+    # timed calls is a multiple of iters; each must be preceded by a flush.
+    assert timed.count("f") % iters == 0  # nosec B101
+    assert ("f", "f") not in zip(timed, timed[1:])  # nosec B101
 
 
 def test_default_flush_evicts_last_level_cache():
@@ -68,10 +105,25 @@ def test_default_flush_evicts_last_level_cache():
     # peak, while a short copy's writes are absorbed by the write-back cache,
     # which no flush ahead of the copy can prevent. On BMG that pair differs by
     # ~1.8x with the flush working correctly.
+    #
+    # The comparison only means something if the cached copy takes markedly
+    # longer than the helper reports for any kernel at all. On a GPU shared
+    # with another process, time-slicing inflates every measurement by the
+    # same amount and both copies collapse onto that floor; so does a copy too
+    # small for the part's cache to resolve. Neither says anything about the
+    # flush, so the test is skipped rather than failed; the check above still
+    # covers the flush's size and placement.
     llc_floats = torch.xpu.get_device_properties().last_level_cache_size // 4
-    cached = _copy_bytes_per_s(llc_floats // 4, flush_gpu_cache_size_mb=0)
-    flushed = _copy_bytes_per_s(llc_floats // 4)
-    assert flushed < cached / 1.5  # nosec B101
+    floor_s = _copy_seconds(1, flush_gpu_cache_size_mb=0)
+    cached_s = _copy_seconds(llc_floats // 4, flush_gpu_cache_size_mb=0)
+    if cached_s < 1.5 * floor_s:
+        pytest.skip(
+            f"cached copy ({cached_s * 1e6:.0f} us) is at the launch floor "
+            f"({floor_s * 1e6:.0f} us): the GPU is shared or the cache is too "
+            "small to resolve, so the flush cannot be observed"
+        )
+    flushed_s = _copy_seconds(llc_floats // 4)
+    assert flushed_s > 1.5 * cached_s  # nosec B101
 
 
 def test_returns_output_and_passes_kwargs():
