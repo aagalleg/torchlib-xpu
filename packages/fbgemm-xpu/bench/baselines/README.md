@@ -44,7 +44,11 @@ around 40 to 60 µs, up to 10% faster: the 384 MB flush only partly hid the
 host there.
 
 The BMG baseline was recorded on one B60 in a Kubernetes pod limited to 4
-CPUs, with `OMP_NUM_THREADS=4`.
+CPUs, with `OMP_NUM_THREADS=4`. Both baselines predate the random-data flush
+described under Timing below; they were taken with a zero fill. On PVC, which
+does not compress memory, that fill evicted the cache all the same. On BMG it
+may not have, so its rows for shapes that fit in the 18 MB L2 may be
+optimistic until the baseline is rerun.
 
 ## What the sweep measures
 
@@ -61,14 +65,16 @@ CPUs, with `OMP_NUM_THREADS=4`.
   mismatches, the run fails and no CSV is written.
 - **Timing:** the median of 100 iterations, timed with XPU events, after 2
   warm-ups. Before each iteration, a buffer twice the size of the device's
-  last-level cache is zeroed outside the timed region, so operands start in
-  device memory rather than L2. Events time the GPU timeline, so the GPU must
-  not wait for the host inside the timed window. GPU work lasting twice the
-  host submission time is therefore queued ahead of each start event: a
-  `torch.xpu._sleep` spin where the driver supports it, otherwise further
-  passes of the flush. An iteration that may still have waited is repeated
-  with more work, and a warning is logged if it persists. The forward times
-  the operator call. The backward times
+  last-level cache, holding random data, is negated in place outside the
+  timed region, so operands start in device memory rather than L2. Every
+  byte is read and written: a zero fill can be elided on parts with memory
+  compression, such as BMG, and then evicts nothing. Events time the GPU
+  timeline, so the GPU must not wait for the host inside the timed window.
+  GPU work lasting twice the host submission time is therefore queued ahead
+  of each start event: a `torch.xpu._sleep` spin where the driver supports
+  it, otherwise further passes of the flush. An iteration that may still have
+  waited is repeated with more work, and a warning is logged if it persists.
+  The forward times the operator call. The backward times
   `torch.autograd.grad` on a graph built once. All four backwards run XPU
   kernels:
   - `jagged_to_padded_dense` and `jagged_2d_to_dense` use

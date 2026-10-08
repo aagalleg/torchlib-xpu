@@ -37,6 +37,18 @@ _MAX_TOTAL_LEAD_S = 1.0
 _LEAD_ATTEMPTS = 4
 _SLEEP_CALIBRATION_CYCLES = 10_000_000
 
+# The lead is sized from a calibration of its unit of work, which is a
+# difference of two timings and so can come out as zero or negative from
+# noise alone. A result below a physical bound is replaced by the bound, and
+# the units queued per iteration are capped besides, so a bad calibration can
+# cost a bounded amount of GPU time rather than hundreds of thousands of flush
+# passes. 10 TB/s and 10 GHz are above any current part; 64 passes of a buffer
+# twice the last-level cache is some 10 ms on BMG and ~50 ms on a PVC tile.
+_CALIBRATION_REPEATS = 3
+_MAX_PLAUSIBLE_BYTES_PER_S = 10e12
+_MIN_SLEEP_S_PER_CYCLE = 1e-10
+_MAX_LEAD_PASSES = 64
+
 
 @functools.cache
 def _sleep_supported(device_index: int) -> bool:
@@ -59,25 +71,31 @@ def gpu_lead_method() -> str:
     return "repeated cache flush passes"
 
 
-def _seconds_per_unit(work: Callable[[int], None], units: int) -> float:
+def _seconds_per_unit(work: Callable[[int], None], units: int, floor: float) -> float:
     """GPU time of one unit of ``work``, which queues ``n`` units when called.
 
     Each length is timed behind a primer, so the GPU is not left waiting for
     the host inside the timed window, and the difference of two lengths
-    cancels any fixed per-kernel cost.
+    cancels any fixed per-kernel cost. The difference is taken as the median
+    of several repeats, and never below ``floor``, a physical lower bound on
+    the unit: two timings that come out equal or inverted are noise, not a
+    unit that costs nothing.
     """
-    seconds = []
-    for n in (units, 2 * units):
-        start = torch.xpu.Event(enable_timing=True)
-        end = torch.xpu.Event(enable_timing=True)
-        torch.xpu.synchronize()
-        work(units)
-        start.record()
-        work(n)
-        end.record()
-        end.synchronize()
-        seconds.append(start.elapsed_time(end) * 1.0e-3)
-    return max(seconds[1] - seconds[0], 1.0e-9) / units
+    diffs = []
+    for _ in range(_CALIBRATION_REPEATS):
+        seconds = []
+        for n in (units, 2 * units):
+            start = torch.xpu.Event(enable_timing=True)
+            end = torch.xpu.Event(enable_timing=True)
+            torch.xpu.synchronize()
+            work(units)
+            start.record()
+            work(n)
+            end.record()
+            end.synchronize()
+            seconds.append(start.elapsed_time(end) * 1.0e-3)
+        diffs.append(seconds[1] - seconds[0])
+    return max(statistics.median(diffs) / units, floor)
 
 
 def benchmark_torch_function(
@@ -93,11 +111,14 @@ def benchmark_torch_function(
     """Time ``f(*args, **kwargs)`` on XPU with device events.
 
     Returns the median per-iteration time in seconds and the last output.
-    Every iteration first overwrites a ``flush_gpu_cache_size_mb`` scratch
+    Every iteration first rewrites a ``flush_gpu_cache_size_mb`` scratch
     buffer, outside the timed region, so no iteration starts with its operands
     already in cache. The default is twice the device's last-level cache:
     upstream's 40 MB is sized for CUDA parts, and a PVC tile has 192 MB of L2,
-    so 40 MB leaves operands resident and inflates bandwidth.
+    so 40 MB leaves operands resident and inflates bandwidth. The buffer holds
+    random data and each pass negates it in place, reading and writing every
+    byte: a zero fill, upstream's choice, can be elided on parts with memory
+    compression, which leaves the cache untouched.
 
     Events time the GPU timeline, so if the GPU reaches the start event before
     the host has submitted ``f``, the wait for the host is timed as well. Each
@@ -106,7 +127,7 @@ def benchmark_torch_function(
     include one-time costs such as kernel compilation, which no later iteration
     pays. The work is a ``torch.xpu._sleep`` spin after the flush where the
     driver supports it, as the spin touches no memory; otherwise the flush
-    buffer is overwritten repeatedly, which leaves the cache just as flushed.
+    buffer is rewritten repeatedly, which leaves the cache just as flushed.
     With neither, that is an old driver and a flush size of 0, no work is
     queued. An iteration whose start event completed before the host finished
     submitting it may include such a wait; the measurement is then repeated
@@ -139,26 +160,32 @@ def benchmark_torch_function(
     max_lead_s = max(_MIN_LEAD_S, min(_MAX_LEAD_S, _MAX_TOTAL_LEAD_S / iters))
     lead_s = min(2 * host_s + _MIN_LEAD_S, max_lead_s)
 
-    cache = torch.empty(
+    cache = torch.rand(
         int(flush_gpu_cache_size_mb * 1024 * 1024 // 4), dtype=torch.float, device="xpu"
     )
 
     def flush(passes: int) -> None:
         for _ in range(passes):
-            cache.zero_()
+            cache.neg_()
 
     if _sleep_supported(torch.xpu.current_device()):
-        sleep_s = _seconds_per_unit(torch.xpu._sleep, _SLEEP_CALIBRATION_CYCLES)
+        sleep_s = _seconds_per_unit(
+            torch.xpu._sleep, _SLEEP_CALIBRATION_CYCLES, _MIN_SLEEP_S_PER_CYCLE
+        )
 
         def queue_lead(seconds: float) -> None:
             flush(1 if flush_gpu_cache_size_mb else 0)
             torch.xpu._sleep(math.ceil(seconds / sleep_s))
 
     elif flush_gpu_cache_size_mb:
-        pass_s = _seconds_per_unit(flush, 2)
+        # A pass reads and writes the buffer once.
+        pass_floor_s = (
+            2 * cache.numel() * cache.element_size() / _MAX_PLAUSIBLE_BYTES_PER_S
+        )
+        pass_s = _seconds_per_unit(flush, 2, pass_floor_s)
 
         def queue_lead(seconds: float) -> None:
-            flush(max(1, math.ceil(seconds / pass_s)))
+            flush(min(_MAX_LEAD_PASSES, max(1, math.ceil(seconds / pass_s))))
 
     else:
 

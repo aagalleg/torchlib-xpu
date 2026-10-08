@@ -65,14 +65,14 @@ def test_default_flush_is_twice_last_level_cache(monkeypatch):
     flush_bytes = (2 * llc_bytes >> 20) << 20
     events = []
 
-    real_zero_ = torch.Tensor.zero_
+    real_neg_ = torch.Tensor.neg_
 
-    def spy_zero_(self):
+    def spy_neg_(self):
         if self.numel() * self.element_size() == flush_bytes:
             events.append("flush")
-        return real_zero_(self)
+        return real_neg_(self)
 
-    monkeypatch.setattr(torch.Tensor, "zero_", spy_zero_)
+    monkeypatch.setattr(torch.Tensor, "neg_", spy_neg_)
 
     x = torch.zeros(1024, device="xpu")
 
