@@ -8,6 +8,10 @@ against one shape sweep. Each shape is checked against CPU before it is timed,
 so an incorrect result cannot be recorded as a fast one. Run it with::
 
     python -m fbgemm_xpu.bench.jagged_sweep --output jagged_tensor.csv
+
+The CSV holds the timings only. The command, date, device, driver, versions
+and sweep definition go to a Markdown file next to it, ``jagged_tensor.md``
+here, so the CSV stays a plain table that GitHub renders.
 """
 
 import csv
@@ -18,6 +22,7 @@ import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 import click
 import fbgemm_gpu
@@ -132,6 +137,28 @@ def _sweep_metadata(**spec: object) -> dict[str, object]:
         "lengths": "uniform integers in [0, max_len], one draw per shape",
         **spec,
     }
+
+
+def _metadata_path(output: str) -> Path:
+    return Path(output).with_suffix(".md")
+
+
+def _metadata_markdown(csv_name: str, metadata: dict[str, object], fields: list[str]) -> str:
+    # One table row per key; the CSV itself carries no comments so that it
+    # renders as a table on GitHub. Pipes in values would break the table.
+    lines = [
+        f"# {csv_name}",
+        "",
+        f"Timings of the XPU jagged operators written by `{metadata['command']}`.",
+        f"Columns: {', '.join(f'`{f}`' for f in fields)}.",
+        "",
+        "| Key | Value |",
+        "| --- | --- |",
+    ]
+    for key, value in metadata.items():
+        cell = str(value).replace("|", "\\|")
+        lines.append(f"| {key} | {cell} |")
+    return "\n".join(lines) + "\n"
 
 
 def _check_against_cpu(
@@ -290,12 +317,12 @@ def jagged_sweep(
 
     # Written only after every shape passed its CPU check.
     with open(output, "w", newline="") as f:
-        for key, value in metadata.items():
-            f.write(f"# {key}: {value}\n")
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
-    logging.info(f"Wrote {len(rows)} rows to {output}")
+    notes = _metadata_path(output)
+    notes.write_text(_metadata_markdown(os.path.basename(output), metadata, fields))
+    logging.info(f"Wrote {len(rows)} rows to {output} and the run's notes to {notes}")
 
 
 if __name__ == "__main__":

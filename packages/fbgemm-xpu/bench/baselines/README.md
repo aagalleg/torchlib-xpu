@@ -8,10 +8,14 @@ backward:
 - `dense_to_jagged`
 - `jagged_dense_elementwise_add_jagged_output`
 
-| Hardware | File |
-| --- | --- |
-| Intel® Data Center GPU Max 1550 (PVC), one tile | [pvc-max1550/jagged_tensor.csv](pvc-max1550/jagged_tensor.csv) |
-| Intel® Arc™ Pro B60 Graphics (BMG) | [bmg-b60/jagged_tensor.csv](bmg-b60/jagged_tensor.csv) |
+| Hardware | Timings | Run notes |
+| --- | --- | --- |
+| Intel® Data Center GPU Max 1550 (PVC), one tile | [pvc-max1550/jagged_tensor.csv](pvc-max1550/jagged_tensor.csv) | [pvc-max1550/README.md](pvc-max1550/README.md) |
+| Intel® Arc™ Pro B60 Graphics (BMG) | [bmg-b60/jagged_tensor.csv](bmg-b60/jagged_tensor.csv) | [bmg-b60/README.md](bmg-b60/README.md) |
+
+Each CSV is a plain table, so GitHub renders it. The command, date, device,
+driver, versions and sweep definition of the run that produced it are in the
+`README.md` beside it, in the form the sweep writes them.
 
 ## Reproduce
 
@@ -27,8 +31,12 @@ PVC that is a single tile. In a container with a CPU limit, also set
 `OMP_NUM_THREADS` to that limit: PyTorch otherwise starts a thread per host
 core, and the container is throttled.
 
+The sweep writes two files: `jagged_tensor.csv` with the timings, and
+`jagged_tensor.md` with the run's command, date, device, driver, versions and
+sweep definition.
+
 The PVC baseline was recorded when jagged-sweep was a case of the patched
-upstream script, so its header shows that command and an `fbgemm_checkout`
+upstream script, so its notes show that command and an `fbgemm_checkout`
 line. It also predates the GPU lead described under Timing below, so its
 `timing` line does not mention it. Rerunning PVC rows with the lead matched
 the smallest and largest shapes within noise, and made some mid-size rows,
@@ -68,9 +76,9 @@ CPUs, with `OMP_NUM_THREADS=4`.
   - `dense_to_jagged` and `jagged_dense_elementwise_add_jagged_output` use
     `jagged_to_padded_dense_forward`.
 
-The CSV starts with `# key: value` lines recording the command, date, device,
-driver, versions and the sweep definition. Compare two runs only if the
-device, driver, versions and sweep definition match.
+The notes beside each CSV record the command, date, device, driver, versions
+and the sweep definition. Compare two runs only if the device, driver,
+versions and sweep definition match.
 
 ### Bandwidth
 

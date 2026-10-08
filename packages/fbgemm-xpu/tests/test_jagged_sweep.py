@@ -32,15 +32,24 @@ def test_writes_metadata_and_one_row_per_case(tmp_path):
     )
     assert result.exit_code == 0, result.output  # nosec B101
 
+    # The CSV is a plain table: no comment lines, so GitHub renders it.
     lines = output.read_text().splitlines()
-    metadata = dict(
-        line[2:].split(": ", 1) for line in lines if line.startswith("# ")
-    )
+    assert lines[0].startswith("family,direction,dtype,")  # nosec B101
+    assert not any(line.startswith("#") for line in lines)  # nosec B101
+
+    # The run's metadata goes to a Markdown table next to it.
+    notes = (tmp_path / "sweep.md").read_text().splitlines()
+    assert notes[0] == "# sweep.csv"  # nosec B101
+    metadata = {}
+    for line in notes:
+        if line.startswith("| ") and not line.startswith("| ---"):
+            _, key, value, _ = line.split("|")
+            metadata[key.strip()] = value.strip()
     assert metadata["batch_sizes"] == "2,3"  # nosec B101
     assert metadata["device"] == torch.xpu.get_device_name()  # nosec B101
     assert "so the GPU does not wait for the host" in metadata["timing"]  # nosec B101
 
-    rows = list(csv.DictReader(line for line in lines if not line.startswith("#")))
+    rows = list(csv.DictReader(lines))
     assert len(rows) == 2 * 1 * 2 * len(SWEEP_FAMILIES) * 2  # nosec B101
     assert {r["family"] for r in rows} == set(SWEEP_FAMILIES)  # nosec B101
     assert {r["direction"] for r in rows} == {"fwd", "bwd"}  # nosec B101
@@ -75,6 +84,8 @@ def test_runs_as_module(tmp_path):
     )
     assert result.returncode == 0, result.stderr  # nosec B101
     assert "family=dense_to_jagged" in result.stderr  # nosec B101
-    assert output.read_text().startswith(  # nosec B101
-        "# command: python -m fbgemm_xpu.bench.jagged_sweep --smoke"
+    assert output.read_text().startswith("family,direction,")  # nosec B101
+    assert (  # nosec B101
+        "`python -m fbgemm_xpu.bench.jagged_sweep --smoke"
+        in (tmp_path / "smoke.md").read_text()
     )
