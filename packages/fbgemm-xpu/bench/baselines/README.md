@@ -44,11 +44,14 @@ around 40 to 60 µs, up to 10% faster: the 384 MB flush only partly hid the
 host there.
 
 The BMG baseline was recorded on one B60 in a Kubernetes pod limited to 4
-CPUs, with `OMP_NUM_THREADS=4`. Both baselines predate the random-data flush
-described under Timing below; they were taken with a zero fill. On PVC, which
-does not compress memory, that fill evicted the cache all the same. On BMG it
-may not have, so its rows for shapes that fit in the 18 MB L2 may be
-optimistic until the baseline is rerun.
+CPUs, with `OMP_NUM_THREADS=4`. Both baselines predate the clean flush
+described under Timing below; they were taken with a zero fill. On PVC that
+fill leaves L2 dirty just as an in-place negation does, so every row includes
+write-back the clean flush keeps out of the timed window, and rows for shapes
+that fit in the 192 MB L2 can be about twice as slow as a rerun: a copy of
+half the L2 took 314 µs after a zero fill and 139 µs after a clean flush. On
+a B60 a zero fill timed within 2% of a clean flush, so its rows should hold
+until the baseline is rerun.
 
 ## What the sweep measures
 
@@ -64,12 +67,14 @@ optimistic until the baseline is rerun.
   `torch.testing.assert_close` before anything is timed. If any shape
   mismatches, the run fails and no CSV is written.
 - **Timing:** the median of 100 iterations, timed with XPU events, after 2
-  warm-ups. Before each iteration, a buffer twice the size of the device's
-  last-level cache, holding random data, is negated in place outside the
-  timed region, so operands start in device memory rather than L2. Every
-  byte is read and written: a zero fill can be elided on parts with memory
-  compression, such as BMG, and then evicts nothing. Events time the GPU
-  timeline, so the GPU must not wait for the host inside the timed window.
+  warm-ups. Before each iteration, outside the timed region, a buffer twice
+  the size of the device's last-level cache, holding random data, is negated
+  in place, and then a second buffer of the same size is read, so operands
+  start in device memory rather than L2 and L2 holds clean lines. Without the
+  read, the flush leaves L2 dirty and the timed call pays for the write-back:
+  on a PVC tile that added ~170 µs to a copy that fits in L2 and ~210 µs to
+  one four times its size. Events time the GPU timeline, so the GPU must not
+  wait for the host inside the timed window.
   GPU work lasting twice the host submission time is therefore queued ahead
   of each start event: a `torch.xpu._sleep` spin where the driver supports
   it, otherwise further passes of the flush. An iteration that may still have
@@ -112,10 +117,9 @@ achieves.
   too short to keep the GPU busy while the host submits, so the timed window
   measured the host instead.
 - Shapes whose operands fit in the last-level cache (192 MB per PVC tile,
-  18 MB on B60) report conservative figures. The flush leaves dirty lines in
-  L2, and writing them back counts against the timed call. FBGEMM's CUDA
-  helper has the same bias. The alternative, upstream's fixed 40 MB flush,
-  leaves PVC operands in L2 and reports up to twice the tile's HBM bandwidth.
+  18 MB on B60) start from device memory, as the flush evicts them. The
+  alternative, upstream's fixed 40 MB flush, leaves PVC operands in L2 and
+  reports up to twice the tile's HBM bandwidth.
 - Run to run, PVC times varied by a median of 0.7%, a 95th percentile of
   2.8% and at most 5.5%, the last on shapes under 60 µs. BMG times varied by
   a median of 0.1%, a 95th percentile of 1.2% and at most 4.9%, again on

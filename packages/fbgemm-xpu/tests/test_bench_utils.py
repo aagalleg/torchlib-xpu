@@ -66,13 +66,20 @@ def test_default_flush_is_twice_last_level_cache(monkeypatch):
     events = []
 
     real_neg_ = torch.Tensor.neg_
+    real_sum = torch.sum
 
     def spy_neg_(self):
         if self.numel() * self.element_size() == flush_bytes:
-            events.append("flush")
+            events.append("write")
         return real_neg_(self)
 
+    def spy_sum(input, *args, **kwargs):
+        if input.numel() * input.element_size() == flush_bytes:
+            events.append("read")
+        return real_sum(input, *args, **kwargs)
+
     monkeypatch.setattr(torch.Tensor, "neg_", spy_neg_)
+    monkeypatch.setattr(torch, "sum", spy_sum)
 
     x = torch.zeros(1024, device="xpu")
 
@@ -83,28 +90,34 @@ def test_default_flush_is_twice_last_level_cache(monkeypatch):
     iters, num_warmups = 5, 2
     benchmark_torch_function(f, (), iters=iters, num_warmups=num_warmups)
 
-    assert "flush" in events  # nosec B101
-    warmups, timed = events[: events.index("flush")], events[events.index("flush") :]
+    assert "write" in events  # nosec B101
+    first_flush = events.index("write")
+    warmups, timed = events[:first_flush], events[first_flush:]
     assert warmups == ["f"] * num_warmups  # nosec B101
     # The timed loop may be repeated with a longer GPU lead, so the count of
-    # timed calls is a multiple of iters; each must be preceded by a flush.
+    # timed calls is a multiple of iters. Each pass writes one buffer and then
+    # reads the other, and each timed call follows a read, so the cache holds
+    # clean lines when it starts.
     assert timed.count("f") % iters == 0  # nosec B101
-    assert ("f", "f") not in zip(timed, timed[1:])  # nosec B101
+    for previous, event in zip(timed, timed[1:]):
+        if event == "f":
+            assert previous == "read"  # nosec B101
+        elif event == "read":
+            assert previous == "write"  # nosec B101
 
 
 def test_default_flush_evicts_last_level_cache():
-    # The same copy, sized to half the last-level cache, timed with and without
-    # the default flush. Left in cache between iterations it runs at cache
-    # bandwidth; after the flush its operands must come from memory, markedly
-    # slower. Upstream's fixed 40 MB flush fails this on PVC (192 MB L2): the
-    # operands stay resident and the flushed copy is as fast as the cached one.
+    # The same copy, sized to half the last-level cache, timed with the
+    # default flush, with no flush, and with a reference flush four times the
+    # default, which leaves nothing of the copy in cache on any part. The
+    # default must cover at least half of the gap between the other two.
+    # Upstream's fixed 40 MB flush fails this on PVC (192 MB L2): the operands
+    # stay resident and the flushed copy is as fast as the cached one.
     #
-    # The size is held constant on purpose. Comparing against a much larger
-    # streaming copy also measures how the memory system treats the two sizes,
-    # which varies by part: on GDDR6 a long read+write stream runs well below
-    # peak, while a short copy's writes are absorbed by the write-back cache,
-    # which no flush ahead of the copy can prevent. On BMG that pair differs by
-    # ~1.8x with the flush working correctly.
+    # The reference, rather than a fixed ratio to the cached copy, sets what
+    # eviction costs: that varies by part, as the flush leaves the cache clean
+    # and a short copy's writes are absorbed by the write-back cache. A PVC
+    # tile takes 2.4x as long for the evicted copy, a B60 only ~1.14x.
     #
     # The comparison only means something if the cached copy takes markedly
     # longer than the helper reports for any kernel at all. On a GPU shared
@@ -113,7 +126,8 @@ def test_default_flush_evicts_last_level_cache():
     # small for the part's cache to resolve. Neither says anything about the
     # flush, so the test is skipped rather than failed; the check above still
     # covers the flush's size and placement.
-    llc_floats = torch.xpu.get_device_properties().last_level_cache_size // 4
+    llc_bytes = torch.xpu.get_device_properties().last_level_cache_size
+    llc_floats = llc_bytes // 4
     floor_s = _copy_seconds(1, flush_gpu_cache_size_mb=0)
     cached_s = _copy_seconds(llc_floats // 4, flush_gpu_cache_size_mb=0)
     if cached_s < 1.5 * floor_s:
@@ -122,8 +136,30 @@ def test_default_flush_evicts_last_level_cache():
             f"({floor_s * 1e6:.0f} us): the GPU is shared or the cache is too "
             "small to resolve, so the flush cannot be observed"
         )
+    reference_s = _copy_seconds(
+        llc_floats // 4, flush_gpu_cache_size_mb=8 * llc_bytes >> 20
+    )
+    if reference_s < 1.05 * cached_s:
+        pytest.skip(
+            f"evicted copy ({reference_s * 1e6:.0f} us) is within 5% of the "
+            f"cached one ({cached_s * 1e6:.0f} us), so the flush cannot be "
+            "observed"
+        )
     flushed_s = _copy_seconds(llc_floats // 4)
-    assert flushed_s > 1.5 * cached_s  # nosec B101
+    assert flushed_s - cached_s >= 0.5 * (reference_s - cached_s)  # nosec B101
+
+
+def test_default_flush_adds_no_write_back_to_timed_call():
+    # A copy four times the last-level cache starts from memory either way, so
+    # the flush ahead of it must not make it slower. A flush that left the
+    # cache full of dirty lines did: the copy wrote them back inside the timed
+    # window, 8% slower than with no flush on a PVC tile and 6% on a B60. A
+    # clean flush is 5-7% faster than none, as no flush leaves the previous
+    # iteration's writes to be written back.
+    llc_floats = torch.xpu.get_device_properties().last_level_cache_size // 4
+    unflushed_s = _copy_seconds(4 * llc_floats, flush_gpu_cache_size_mb=0)
+    flushed_s = _copy_seconds(4 * llc_floats)
+    assert flushed_s <= 1.02 * unflushed_s  # nosec B101
 
 
 def test_returns_output_and_passes_kwargs():
